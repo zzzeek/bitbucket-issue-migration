@@ -1,3 +1,23 @@
+# translate bitbucket terms to desired
+# github labels.   setting to null means the
+# label will be removed
+label_translations:
+  "proposal": "feature"
+  "enhancement": "feature"
+  "trivial": "easy"
+  "critical": "high priority"
+  "major": null
+  "minor": "low priority"
+
+# bitbucket issue states that should be converted
+# into labels.  note the label_translations take
+# affect for these *after* they are looked up in this list.
+states_as_labels:
+  - "wontfix"
+  - "on hold"
+  - "duplicate"
+  - "invalid"
+
 github_username_template: |
   GitHub: [{gh_user}](https://github.com/{gh_user})
 

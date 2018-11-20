@@ -152,11 +152,10 @@ def read_arguments():
     )
 
     parser.add_argument(
-        "--use-template", type=str,
-        default="templates.yml",
+        "--use-config", type=str,
+        default="config.yml",
         help=(
-            "File path of YAML file with formatting templates, "
-            "see templates.yml for example."
+            "config.yml file to use.  defaults to config.yml."
         )
     )
     return parser.parse_args()
@@ -235,14 +234,16 @@ def main(options):
     elif gh_repo_status == 404:
         raise RuntimeError("Could not find a GitHub repo at: " + gh_repo_url)
 
-    with open(options.use_template, "r") as file_:
-        templates = yaml.load(file_)
+    with open(options.use_config, "r") as file_:
+        config = yaml.load(file_)
 
     # GitHub's Import API currently requires a special header
     headers = {'Accept': 'application/vnd.github.golden-comet-preview+json'}
     gh_milestones = GithubMilestones(
         options.github_repo, options.gh_auth, headers)
-    gh_labels = GithubLabels(options.github_repo, options.gh_auth, headers)
+    gh_labels = GithubLabels(
+        config['label_translations'],
+        options.github_repo, options.gh_auth, headers)
 
     if options.attachments_wiki:
         if options.mention_attachments:
@@ -292,24 +293,25 @@ def main(options):
 
         gh_issue = convert_issue(
             issue, comments, changes,
-            options, attachment_links, gh_milestones, gh_labels, templates
+            options, attachment_links, gh_milestones, gh_labels, config
         )
         gh_comments = [
-            convert_comment(c, options, templates) for c in comments
+            convert_comment(c, options, config) for c in comments
             if c['content']['raw'] is not None
         ]
 
         if options.mention_changes:
+            last_change = changes[-1]
             gh_comments += [
                 converted_change for converted_change in
-                [convert_change(c, options, templates) for c in changes]
+                [convert_change(c, options, config, gh_labels,
+                                c is last_change)
+                 for c in changes]
                 if converted_change
             ]
 
         print("Queuing bitbucket issue {} for export".format(issue['id']))
-        work_queue.put(
-            (issue['id'], gh_issue, gh_comments)
-        )
+        work_queue.put((issue['id'], gh_issue, gh_comments))
 
     work_queue.join()
 
@@ -561,7 +563,7 @@ def get_issue_changes(issue_id, bb_url, bb_auth):
 
 def convert_issue(
         issue, comments, changes, options, attachment_links, gh_milestones,
-        gh_labels, templates):
+        gh_labels, config):
     """
     Convert an issue schema from Bitbucket to GitHub's Issue Import API
     """
@@ -574,6 +576,7 @@ def convert_issue(
             body="filler issue created by bitbucket_issue_migration",
             closed=True,
         )
+
     labels = {issue['priority']}
 
     for key in ['component', 'kind', 'version']:
@@ -582,20 +585,17 @@ def convert_issue(
             if key == 'component':
                 v = v['name']
 
-            if v is not None and v != '(none)':
-                labels.add(v.replace(',', '')[:50])
-
-    if issue['state'] in ('duplicate', 'wontfix', 'invalid'):
+    if issue['state'] in config['states_as_labels']:
         labels.add(issue['state'])
 
-    for label in labels:
-        gh_labels.ensure(label)
+    labels = gh_labels.ensure(labels)
 
-    is_closed = issue['state'] not in ('open', 'new', 'on hold')
+    is_closed = issue['state'] not in ('open', 'new')
+
     out = {
         'title': issue['title'],
         'body': format_issue_body(
-            issue, attachment_links, options, templates),
+            issue, attachment_links, options, config),
         'closed': is_closed,
         'created_at': convert_date(issue['created_on']),
         'updated_at': convert_date(issue['updated_on']),
@@ -612,9 +612,9 @@ def convert_issue(
             for change in changes
             if 'state' in change['changes'] and
             change['changes']['state']['old'] in
-            ('', 'open', 'new', 'on hold') and
+            ('', 'open', 'new') and
             change['changes']['state']['new'] not in
-            ('', 'open', 'new', 'on hold')
+            ('', 'open', 'new')
         ]
         if closed_status:
             out['closed_at'] = sorted(closed_status)[-1]
@@ -630,23 +630,23 @@ def convert_issue(
     return out
 
 
-def convert_comment(comment, options, templates):
+def convert_comment(comment, options, config):
     """
     Convert an issue comment from Bitbucket schema to GitHub's Issue Import API
     schema.
     """
     return {
         'created_at': convert_date(comment['created_on']),
-        'body': format_comment_body(comment, options, templates),
+        'body': format_comment_body(comment, options, config),
     }
 
 
-def convert_change(change, options, templates):
+def convert_change(change, options, config, gh_labels, is_last):
     """
     Convert an issue comment from Bitbucket schema to GitHub's Issue Import API
     schema.
     """
-    body = format_change_body(change, options, templates)
+    body = format_change_body(change, options, config, gh_labels, is_last)
     if not body:
         return None
     return {
@@ -655,7 +655,7 @@ def convert_change(change, options, templates):
     }
 
 
-def format_issue_body(issue, attachment_links, options, templates):
+def format_issue_body(issue, attachment_links, options, config):
     content = issue['content']['raw']
     content = convert_changesets(content, options)
     content = convert_creole_braces(content)
@@ -664,14 +664,14 @@ def format_issue_body(issue, attachment_links, options, templates):
     reporter = issue.get('reporter')
 
     if options.attachments_wiki and attachment_links:
-        attachments = templates['linked_attachments_template'].format(
+        attachments = config['linked_attachments_template'].format(
             attachment_links=" | ".join(
                 "[{}]({})".format(link['name'], link['link'])
                 for link in attachment_links),
             sep=SEP
         )
     elif options.mention_attachments and attachment_links:
-        attachments = templates['names_only_attachments_template'].format(
+        attachments = config['names_only_attachments_template'].format(
             attachment_names=", ".join(
                 "{}".format(link['name'])
                 for link in attachment_links),
@@ -682,7 +682,7 @@ def format_issue_body(issue, attachment_links, options, templates):
 
     data = dict(
         # anonymous issues are missing 'reported_by' key
-        reporter=format_user(reporter, options, templates),
+        reporter=format_user(reporter, options, config),
         sep=SEP,
         repo=options.bitbucket_repo,
         id=issue['id'],
@@ -690,12 +690,12 @@ def format_issue_body(issue, attachment_links, options, templates):
         attachments=attachments
     )
     skip_user = reporter and reporter['username'] == options.bb_skip
-    template = templates['issue_template_skip_user'] \
-        if skip_user else templates['issue_template']
+    template = config['issue_template_skip_user'] \
+        if skip_user else config['issue_template']
     return template.format(**data)
 
 
-def format_comment_body(comment, options, templates):
+def format_comment_body(comment, options, config):
     content = comment['content']['raw']
     content = convert_changesets(content, options)
     content = convert_creole_braces(content)
@@ -703,70 +703,121 @@ def format_comment_body(comment, options, templates):
     content = convert_users(content, options)
     author = comment['user']
     data = dict(
-        author=format_user(author, options, templates),
+        author=format_user(author, options, config),
         sep=SEP,
         content=content,
     )
     skip_user = author and author['username'] == options.bb_skip
-    template = templates['comment_template_skip_user'] if skip_user \
-        else templates['comment_template']
+    template = config['comment_template_skip_user'] if skip_user \
+        else config['comment_template']
     return template.format(**data)
 
 
-def format_change_body(change, options, templates):
+def format_change_body(change, options, config, gh_labels, is_last):
     author = change['user']
 
-    # TODO: format this in terms of: "removed labels:...   added labels: ..."
-    # because these are labels now!
+    # bb sneaked in an "assignee_account_id" that's not in their spec...
+    include_changes = {
+        "assignee", "state", "title", "kind", "milestone",
+        "component", "priority", "version", "content"}
+    added_labels = set()
+    removed_labels = set()
+    field_changes = set()
+    status_changes = set()
+    misc_changes = set()
 
-    def format_element_keyword(keyword):
-        # try to disambiguate between a change of description / content
-        # and a more common change of a keyword
-        if keyword is None:
-            return ''
+    for change_element in change['changes']:
+        if change_element not in include_changes:
+            continue
 
-        l_k = len(keyword)
-
-        if l_k:
-            if l_k > 50 and " " in keyword:
-                return '"{}"'.format(keyword)
-            else:
-                return '**{}**'.format(keyword)
-        else:
-            return keyword
-
-    def format_change_element(change_element):
         old = change['changes'][change_element]['old']
         new = change['changes'][change_element]['new']
 
-        old = format_element_keyword(old)
-        new = format_element_keyword(new)
+        new_is_label = change_element in (
+            'priority', 'component', 'kind', 'version') or (
+            change_element == 'state' and new in config['states_as_labels']
+        )
 
-        if old and new:
-            return 'changed **{}** from {} to {}'.format(
-                change_element, old, new)
-        elif old:
-            return 'removed **{}** (was: {})'.format(change_element, old)
-        elif new:
-            return 'set **{}** to {}'.format(change_element, new)
+        old_is_label = change_element in (
+            'priority', 'component', 'kind', 'version') or (
+            change_element == 'state' and old in config['states_as_labels']
+        )
+
+        old = gh_labels.translate(old)
+        new = gh_labels.translate(new)
+
+        oldnewchange = [change_element, None, None]
+
+        if old_is_label:
+            if old:
+                removed_labels.add(old)
         else:
-            return None
+            oldnewchange[1] = old
 
-    changes = "\n".join(
-        "* {}".format(formatted) for formatted in [
-            format_change_element(change_element)
-            for change_element in change['changes']
-        ] if formatted
-    )
+        if new_is_label:
+            if new:
+                added_labels.add(new)
+        else:
+            oldnewchange[2] = new
+
+        if change_element == 'state':
+            if new in ('open', 'new', 'on hold') and \
+                    old in ('resolved', 'duplicate', 'wontfix', 'closed'):
+                status_changes.add("reopened")
+
+            if not is_last and old in ('open', 'new', 'on hold') and \
+                    new in ('resolved', 'duplicate', 'wontfix', 'closed'):
+                status_changes.add("closed")
+        elif change_element == "content":
+            misc_changes.add("edited description")
+        elif not old_is_label or not new_is_label:
+            field_changes.add(tuple(oldnewchange))
+
+    def format_change_element(field, old, new):
+        if old and new:
+            return 'changed **{}** from "{}" to "{}"'.format(field, old, new)
+        elif old:
+            return 'removed **{}** (was: "{}")'.format(field, old)
+        elif new:
+            return 'set **{}** to "{}"'.format(field, new)
+        else:
+            assert False
+
+    changes = []
+    if removed_labels:
+        changes.append(
+            "* removed labels: {}".format(
+                ", ".join("**{}**".format(label) for label in removed_labels)
+            )
+        )
+    if added_labels:
+        changes.append(
+            "* added labels: {}".format(
+                ", ".join("**{}**".format(label) for label in added_labels)
+            )
+        )
+    if field_changes:
+        for field, old, new in field_changes:
+            changes.append(
+                "* {}".format(format_change_element(field, old, new)))
+    if status_changes:
+        for verb in status_changes:
+            changes.append(
+                "* changed **status** to {}".format(verb)
+            )
+    if misc_changes:
+        for misc in misc_changes:
+            changes.append("* {}".format(misc))
+
     if not changes:
         return None
 
     data = dict(
-        author=format_user(author, options, templates),
+        author=format_user(author, options, config),
         sep=SEP,
-        changes=changes
+        changes="\n".join(changes)
     )
-    template = templates['change_template']
+    template = config['change_template']
     return template.format(**data)
 
 
@@ -802,7 +853,7 @@ def _gh_username(username, users, gh_auth):
         )
 
 
-def format_user(user, options, templates):
+def format_user(user, options, config):
     """
     Format a Bitbucket user's info into a string containing either 'Anonymous'
     or their name and links to their Bitbucket and GitHub profiles.
@@ -814,12 +865,12 @@ def format_user(user, options, templates):
     # 'reported_by' key, so just be sure to pass in None
     if user is None:
         return "Anonymous"
-    bb_user = templates['bitbucket_username_template'].strip().format(
+    bb_user = config['bitbucket_username_template'].strip().format(
         **{"bb_user": user['username']})
     gh_username = _gh_username(
         user['username'], options.users, options.gh_auth)
     if gh_username is not None:
-        gh_user = templates['github_username_template'].strip().format(
+        gh_user = config['github_username_template'].strip().format(
             **{"gh_user": gh_username})
     else:
         gh_user = ""
@@ -831,7 +882,7 @@ def format_user(user, options, templates):
         "gh_user_badge": gh_user,
         "display_name": user['display_name']
     }
-    return templates['user_template'].strip().format(**data)
+    return config['user_template'].strip().format(**data)
 
 
 def convert_date(bb_date):
@@ -1011,7 +1062,10 @@ class GithubMilestones:
                     format(respo.status_code))
             for m in respo.json():
                 milestones[m['title']] = m['number']
-            url = respo.links.get("next")
+            if "next" in respo.links:
+                url = respo.links['next']['url']
+            else:
+                url = None
         return milestones
 
     def ensure(self, title):
@@ -1031,7 +1085,8 @@ class GithubMilestones:
 
 
 class GithubLabels:
-    def __init__(self, repo, auth, headers):
+    def __init__(self, label_translations, repo, auth, headers):
+        self.label_translations = label_translations
         self.url = 'https://api.github.com/repos/{repo}/labels'.format(
             repo=repo)
         self.session = requests.Session()
@@ -1050,12 +1105,26 @@ class GithubLabels:
                     format(respo.status_code))
             for m in respo.json():
                 self.labels.add(m['name'])
-            url = respo.links.get("next")
+            if "next" in respo.links:
+                url = respo.links['next']['url']
+            else:
+                url = None
 
-    def ensure(self, name):
-        if name not in self.labels:
-            self.create(name)
-            self.labels.add(name)
+    def translate(self, label):
+        label = self.label_translations.get(label, label)
+        if label in (None, '(none)', "None"):
+            return None
+
+        label = label.replace(",", '')[:50]
+        return label
+
+    def ensure(self, labels):
+        labels = {self.translate(label) for label in labels}.difference([None])
+
+        for label in labels.difference(self.labels):
+            self.create(label)
+            self.labels.add(label)
+        return labels
 
     def create(self, name):
         respo = self.session.post(
