@@ -573,17 +573,19 @@ def convert_issue(
             body="filler issue created by bitbucket_issue_migration",
             closed=True,
         )
-    labels = [issue['priority']]
+    labels = {issue['priority']}
 
     for key in ['component', 'kind', 'version']:
         v = issue[key]
         if v is not None:
             if key == 'component':
                 v = v['name']
-            # Commas are permitted in Bitbucket's components & versions, but
-            # they cannot be in GitHub labels, so they must be removed.
-            # Github caps label lengths at 50, so we truncate anything longer
-            labels.append(v.replace(',', '')[:50])
+
+            if v is not None and v != '(none)':
+                labels.add(v.replace(',', '')[:50])
+
+    if issue['state'] in ('duplicate', 'wontfix', 'invalid'):
+        labels.add(issue['state'])
 
     for label in labels:
         gh_labels.ensure(label)
@@ -596,7 +598,7 @@ def convert_issue(
         'closed': is_closed,
         'created_at': convert_date(issue['created_on']),
         'updated_at': convert_date(issue['updated_on']),
-        'labels': labels,
+        'labels': list(labels),
         ####
         # GitHub Import API supports assignee, but we can't use it because
         # our mapping of BB users to GH users isn't 100% accurate
