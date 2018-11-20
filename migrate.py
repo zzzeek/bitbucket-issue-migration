@@ -300,7 +300,7 @@ def main(options):
             if c['content']['raw'] is not None
         ]
 
-        if options.mention_changes:
+        if options.mention_changes and changes:
             last_change = changes[-1]
             gh_comments += [
                 converted_change for converted_change in
