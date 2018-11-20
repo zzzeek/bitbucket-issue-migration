@@ -366,6 +366,8 @@ def push_issues(abort, work_queue, github_repo, gh_auth, headers, dry_run):
                 raise Exception(
                     "Issues are out of sync, got github issue {} but "
                     "bitbucket issue is at {}".format(gh_issue_id, issue_id))
+        work_queue.task_done()
+
         print("Completed {} issues".format(num_issues))
 
 
