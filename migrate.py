@@ -185,7 +185,8 @@ def main(options):
                 username.
                 """
             )
-        kr_pass_bb = keyring.get_password('Bitbucket', options.bitbucket_username)
+        kr_pass_bb = keyring.get_password(
+            'Bitbucket', options.bitbucket_username)
         bitbucket_password = kr_pass_bb or getpass.getpass(
             "Please enter your Bitbucket password.\n"
             "Note: If your Bitbucket account has two-factor authentication "
@@ -194,7 +195,8 @@ def main(options):
         )
         options.bb_auth = (options.bitbucket_username, bitbucket_password)
         # Verify BB creds work
-        bb_creds_status = requests.head(bb_url, auth=options.bb_auth).status_code
+        bb_creds_status = requests.head(
+            bb_url, auth=options.bb_auth).status_code
         if bb_creds_status == 401:
             raise RuntimeError("Failed to login to Bitbucket.")
         elif bb_creds_status == 403:
@@ -217,7 +219,8 @@ def main(options):
     options.gh_auth = (options.github_username, github_password)
     # Verify GH creds work
     gh_repo_url = 'https://api.github.com/repos/' + options.github_repo
-    gh_repo_status = requests.head(gh_repo_url, auth=options.gh_auth).status_code
+    gh_repo_status = requests.head(
+        gh_repo_url, auth=options.gh_auth).status_code
     if gh_repo_status == 401:
         raise RuntimeError("Failed to login to GitHub.")
     elif gh_repo_status == 403:
@@ -225,8 +228,8 @@ def main(options):
             "GitHub login succeeded, but user '{}' either doesn't have "
             "permission to access the repo at: {}\n"
             "or is over their GitHub API rate limit.\n"
-            "You can read more about GitHub's API rate limiting policies here: "
-            "https://developer.github.com/v3/#rate-limiting"
+            "You can read more about GitHub's API rate limiting policies "
+            "here: https://developer.github.com/v3/#rate-limiting"
             .format(options.github_username, gh_repo_url)
         )
     elif gh_repo_status == 404:
@@ -371,7 +374,7 @@ class DummyIssue(dict):
     def __init__(self, num):
         self.update(
             id=num,
-            #...
+            # ...
         )
 
 
@@ -475,7 +478,7 @@ def get_issues(bb_url, offset, bb_auth):
     if offset:
         params['q'] = "id > {}".format(offset)
 
-    while next_url is not None:  # keep fetching additional pages of issues until all processed
+    while next_url is not None:
         respo = requests.get(
             next_url, auth=bb_auth,
             params=params
@@ -634,6 +637,7 @@ def convert_comment(comment, options, templates):
         'body': format_comment_body(comment, options, templates),
     }
 
+
 def convert_change(change, options, templates):
     """
     Convert an issue comment from Bitbucket schema to GitHub's Issue Import API
@@ -646,8 +650,6 @@ def convert_change(change, options, templates):
         'created_at': convert_date(change['created_on']),
         'body': body
     }
-
-
 
 
 def format_issue_body(issue, attachment_links, options, templates):
@@ -777,10 +779,10 @@ def _gh_username(username, users, gh_auth):
         return None
     elif status_code == 403:
         raise RuntimeError(
-            "GitHub returned HTTP Status Code 403 Forbidden when accessing: {}."
-            "\nThis may be due to rate limiting.\n"
-            "You can read more about GitHub's API rate limiting policies here: "
-            "https://developer.github.com/v3/#rate-limiting"
+            "GitHub returned HTTP Status Code 403 Forbidden when "
+            "accessing: {}.  This may be due to rate limiting. "
+            "You can read more about GitHub's API rate limiting "
+            "policies here: https://developer.github.com/v3/#rate-limiting"
             .format(gh_user_url)
         )
     else:
@@ -839,8 +841,8 @@ def convert_changesets(content, options):
 
         → <<cset 22f3981d50c8>>'
 
-    Since they point to mercurial changesets and there's no easy way to map them
-    to git hashes, better to remove them altogether.
+    Since they point to mercurial changesets and there's no easy way to map
+    them to git hashes, better to remove them altogether.
     """
     if options.link_changesets:
         # Look for things that look like sha's. If they are short, they must
@@ -848,8 +850,11 @@ def convert_changesets(content, options):
         def replace_changeset(match):
             sha = match.group(1)
             if len(sha) >= 8 or re.search(r"[0-9]", sha):
-                return ' [{sha} (bb)](https://bitbucket.org/{repo}/commits/{sha})'.format(
-                    repo=options.bitbucket_repo, sha=sha,
+                return (
+                    ' [{sha} (bb)]'
+                    '(https://bitbucket.org/{repo}/commits/{sha})'.format(
+                        repo=options.bitbucket_repo, sha=sha,
+                    )
                 )
         content = re.sub(r" ([a-f0-9]{6,40})\b", replace_changeset, content)
     else:
@@ -857,6 +862,7 @@ def convert_changesets(content, options):
         filtered_lines = [l for l in lines if not l.startswith("→ <<cset")]
         content = "\n".join(filtered_lines)
     return content
+
 
 def convert_creole_braces(content):
     """
@@ -975,7 +981,8 @@ class GithubMilestones:
     """
 
     def __init__(self, repo, auth, headers):
-        self.url = 'https://api.github.com/repos/{repo}/milestones'.format(repo=repo)
+        self.url = 'https://api.github.com/repos/{repo}/milestones'.\
+            format(repo=repo)
         self.session = requests.Session()
         self.session.auth = auth
         self.session.headers.update(headers)
@@ -991,8 +998,8 @@ class GithubMilestones:
             respo = self.session.get(url)
             if respo.status_code != 200:
                 raise RuntimeError(
-                    "Failed to get milestones due to HTTP status code: {}".format(
-                    respo.status_code))
+                    "Failed to get milestones due to HTTP status code: {}".
+                    format(respo.status_code))
             for m in respo.json():
                 milestones[m['title']] = m['number']
             url = respo.links.get("next")
@@ -1009,14 +1016,15 @@ class GithubMilestones:
         respo = self.session.post(self.url, json={"title": title})
         if respo.status_code != 201:
             raise RuntimeError(
-                "Failed to get milestones due to HTTP status code: {}".format(
-                respo.status_code))
+                "Failed to get milestones due to HTTP status code: {}".
+                format(respo.status_code))
         return respo.json()["number"]
 
 
 class GithubLabels:
     def __init__(self, repo, auth, headers):
-        self.url = 'https://api.github.com/repos/{repo}/labels'.format(repo=repo)
+        self.url = 'https://api.github.com/repos/{repo}/labels'.format(
+            repo=repo)
         self.session = requests.Session()
         self.session.auth = auth
         self.session.headers.update(headers)
@@ -1029,8 +1037,8 @@ class GithubLabels:
             respo = self.session.get(url)
             if respo.status_code != 200:
                 raise RuntimeError(
-                    "Failed to get labels due to HTTP status code: {}".format(
-                    respo.status_code))
+                    "Failed to get labels due to HTTP status code: {}".
+                    format(respo.status_code))
             for m in respo.json():
                 self.labels.add(m['name'])
             url = respo.links.get("next")
@@ -1045,8 +1053,8 @@ class GithubLabels:
             self.url, json={"name": name, "color": self._random_web_color()})
         if respo.status_code != 201:
             raise RuntimeError(
-                "Failed to create label due to HTTP status code: {}".format(
-                respo.status_code))
+                "Failed to create label due to HTTP status code: {}".
+                format(respo.status_code))
 
     def _random_web_color(self):
         r, g, b = [random.randint(0, 15) * 16 for i in range(3)]
