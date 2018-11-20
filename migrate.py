@@ -705,24 +705,42 @@ def format_comment_body(comment, options, templates):
 def format_change_body(change, options, templates):
     author = change['user']
 
+    def format_element_keyword(keyword):
+        # try to disambiguate between a change of description / content
+        # and a more common change of a keyword
+        l_k = len(keyword)
+
+        if l_k:
+            if l_k > 50 and " " in keyword:
+                return '"{}"'.format(keyword)
+            else:
+                return '**{}**'.format(keyword)
+        else:
+            return keyword
+
     def format_change_element(change_element):
         old = change['changes'][change_element]['old']
         new = change['changes'][change_element]['new']
+
+        old = format_element_keyword(old)
+        new = format_element_keyword(new)
+
         if old and new:
-            return 'changed {} from "{}" to "{}"'.format(change_element, old, new)
+            return 'changed **{}** from {} to {}'.format(
+                change_element, old, new)
         elif old:
-            return 'removed "{}" {}'.format(old, change_element)
+            return 'removed **{}** (was: {})'.format(change_element, old)
         elif new:
-            return 'set {} to "{}"'.format(change_element, new)
+            return 'set **{}** to {}'.format(change_element, new)
         else:
             return None
 
-    changes = "; ".join(
-            formatted for formatted in [
-                format_change_element(change_element)
-                for change_element in change['changes']
-            ] if formatted
-        )
+    changes = "\n".join(
+        "* {}".format(formatted) for formatted in [
+            format_change_element(change_element)
+            for change_element in change['changes']
+        ] if formatted
+    )
     if not changes:
         return None
 
