@@ -716,6 +716,9 @@ def format_change_body(change, options, templates):
     def format_element_keyword(keyword):
         # try to disambiguate between a change of description / content
         # and a more common change of a keyword
+        if keyword is None:
+            return ''
+
         l_k = len(keyword)
 
         if l_k:
