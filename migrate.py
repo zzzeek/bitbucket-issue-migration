@@ -897,31 +897,14 @@ def convert_date(bb_date):
 
 def convert_changesets(content, options):
     """
-    Remove changeset references like:
-
-        → <<cset 22f3981d50c8>>'
-
-    Since they point to mercurial changesets and there's no easy way to map
-    them to git hashes, better to remove them altogether.
+    fix up changeset symbols
     """
-    if options.link_changesets:
-        # Look for things that look like sha's. If they are short, they must
-        # have a digit
-        def replace_changeset(match):
-            sha = match.group(1)
-            if len(sha) >= 8 or re.search(r"[0-9]", sha):
-                return (
-                    ' [{sha} (bb)]'
-                    '(https://bitbucket.org/{repo}/commits/{sha})'.format(
-                        repo=options.bitbucket_repo, sha=sha,
-                    )
-                )
-        content = re.sub(r" ([a-f0-9]{6,40})\b", replace_changeset, content)
-    else:
-        lines = content.splitlines()
-        filtered_lines = [l for l in lines if not l.startswith("→ <<cset")]
-        content = "\n".join(filtered_lines)
-    return content
+
+    changeset_re = re.compile(r"<<(?:cset|changeset) (.+?)>>")
+
+    return changeset_re.sub(
+        lambda m: m.group(1), content
+    )
 
 
 def convert_creole_braces(content):
