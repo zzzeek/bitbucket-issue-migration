@@ -21,6 +21,7 @@ import contextlib
 import os
 import pprint
 import queue
+import random
 import re
 import subprocess
 import sys
@@ -236,7 +237,9 @@ def main(options):
 
     # GitHub's Import API currently requires a special header
     headers = {'Accept': 'application/vnd.github.golden-comet-preview+json'}
-    gh_milestones = GithubMilestones(options.github_repo, options.gh_auth, headers)
+    gh_milestones = GithubMilestones(
+        options.github_repo, options.gh_auth, headers)
+    gh_labels = GithubLabels(options.github_repo, options.gh_auth, headers)
 
     if options.attachments_wiki:
         if options.mention_attachments:
@@ -286,7 +289,7 @@ def main(options):
 
         gh_issue = convert_issue(
             issue, comments, changes,
-            options, attachment_links, gh_milestones, templates
+            options, attachment_links, gh_milestones, gh_labels, templates
         )
         gh_comments = [
             convert_comment(c, options, templates) for c in comments
@@ -554,7 +557,7 @@ def get_issue_changes(issue_id, bb_url, bb_auth):
 
 def convert_issue(
         issue, comments, changes, options, attachment_links, gh_milestones,
-        templates):
+        gh_labels, templates):
     """
     Convert an issue schema from Bitbucket to GitHub's Issue Import API
     """
@@ -578,6 +581,9 @@ def convert_issue(
             # they cannot be in GitHub labels, so they must be removed.
             # Github caps label lengths at 50, so we truncate anything longer
             labels.append(v.replace(',', '')[:50])
+
+    for label in labels:
+        gh_labels.ensure(label)
 
     is_closed = issue['state'] not in ('open', 'new', 'on hold')
     out = {
@@ -1006,6 +1012,45 @@ class GithubMilestones:
                 "Failed to get milestones due to HTTP status code: {}".format(
                 respo.status_code))
         return respo.json()["number"]
+
+
+class GithubLabels:
+    def __init__(self, repo, auth, headers):
+        self.url = 'https://api.github.com/repos/{repo}/labels'.format(repo=repo)
+        self.session = requests.Session()
+        self.session.auth = auth
+        self.session.headers.update(headers)
+        self.refresh()
+
+    def refresh(self):
+        self.labels = set()
+        url = self.url + "?state=all"
+        while url:
+            respo = self.session.get(url)
+            if respo.status_code != 200:
+                raise RuntimeError(
+                    "Failed to get labels due to HTTP status code: {}".format(
+                    respo.status_code))
+            for m in respo.json():
+                self.labels.add(m['name'])
+            url = respo.links.get("next")
+
+    def ensure(self, name):
+        if name not in self.labels:
+            self.create(name)
+            self.labels.add(name)
+
+    def create(self, name):
+        respo = self.session.post(
+            self.url, json={"name": name, "color": self._random_web_color()})
+        if respo.status_code != 201:
+            raise RuntimeError(
+                "Failed to create label due to HTTP status code: {}".format(
+                respo.status_code))
+
+    def _random_web_color(self):
+        r, g, b = [random.randint(0, 15) * 16 for i in range(3)]
+        return ('%02X%02X%02X' % (r, g, b))
 
 
 def push_github_issue(issue, comments, github_repo, auth, headers):
