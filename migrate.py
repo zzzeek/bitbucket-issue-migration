@@ -20,11 +20,13 @@ import argparse
 import contextlib
 import os
 import pprint
+import queue
 import re
 import subprocess
 import sys
 import tempfile
 import time
+import threading
 import warnings
 
 import getpass
@@ -244,11 +246,26 @@ def main(options):
         attachments_repo = AttachmentsRepo(options.github_repo, options)
 
     print("getting issues from bitbucket")
-    issues_iterator = get_issues(bb_url, options.skip, options.bb_auth)
+    issues_iterator = fill_gaps(
+        get_issues(bb_url, options.skip, options.bb_auth),
+        options.skip
+    )
 
-    issues_iterator = fill_gaps(issues_iterator, options.skip)
+    abort_event = threading.Event()
+
+    work_queue = queue.Queue()
+    worker_thread = threading.Thread(
+        target=push_issues,
+        args=(abort_event, work_queue, options.github_repo,
+              options.gh_auth, headers, options.dry_run)
+    )
+    worker_thread.daemon = True
+    worker_thread.start()
 
     for index, issue in enumerate(issues_iterator):
+        if abort_event.is_set():
+            break
+
         if isinstance(issue, DummyIssue):
             comments = []
             changes = []
@@ -262,7 +279,8 @@ def main(options):
                 options, attachments_repo
             )
         elif options.mention_attachments:
-            attachment_links = get_attachment_names(issue['id'], bb_url, options.bb_auth)
+            attachment_links = get_attachment_names(
+                issue['id'], bb_url, options.bb_auth)
         else:
             attachment_links = []
 
@@ -282,35 +300,68 @@ def main(options):
                 if converted_change
             ]
 
-        if options.dry_run:
+        print("Queuing bitbucket issue {} for export".format(issue['id']))
+        work_queue.put(
+            (issue['id'], gh_issue, gh_comments)
+        )
+
+    abort_event.set()
+    worker_thread.join()
+
+
+def push_issues(abort, work_queue, github_repo, gh_auth, headers, dry_run):
+    num_issues = 0
+
+    while not abort.is_set():
+        try:
+            issue_id, gh_issue, gh_comments = work_queue.get(timeout=3)
+        except queue.Empty:
+            if abort.is_set():
+                break
+            else:
+                continue
+
+        num_issues += 1
+
+        # keep one second between API requests per githubs rate limiting
+        # advice
+        time.sleep(1)
+
+        if dry_run:
             print("\nIssue: ", gh_issue)
             print("\nComments: ", gh_comments)
-        else:
-            push_respo = push_github_issue(
-                gh_issue, gh_comments, options.github_repo,
-                options.gh_auth, headers
-            )
-            # issue POSTed successfully, now verify the import finished before
-            # continuing. Otherwise, we risk issue IDs not being sync'd between
-            # Bitbucket and GitHub because GitHub processes the data in the
-            # background, so IDs can be out of order if two issues are POSTed
-            # and the latter finishes before the former. For example, if the
-            # former had a bunch more comments to be processed.
-            # https://github.com/jeffwidman/bitbucket-issue-migration/issues/45
-            status_url = push_respo.json()['url']
-            resp = verify_github_issue_import_finished(
-                status_url, options.gh_auth, headers)
+            continue
 
-            # Verify GH & BB issue IDs match.
-            # If this assertion fails, convert_links() will have incorrect
-            # output.  This condition occurs when:
-            # - the GH repository has pre-existing issues.
-            # - the Bitbucket repository has gaps in the numbering.
-            if resp:
-                gh_issue_url = resp.json()['issue_url']
-                gh_issue_id = int(gh_issue_url.split('/')[-1])
-                assert gh_issue_id == issue['id']
-        print("Completed {} issues".format(index + 1))
+        push_respo = push_github_issue(
+            gh_issue, gh_comments, options.github_repo,
+            options.gh_auth, headers
+        )
+
+        # issue POSTed successfully, now verify the import finished before
+        # continuing. Otherwise, we risk issue IDs not being sync'd between
+        # Bitbucket and GitHub because GitHub processes the data in the
+        # background, so IDs can be out of order if two issues are POSTed
+        # and the latter finishes before the former. For example, if the
+        # former had a bunch more comments to be processed.
+        # https://github.com/jeffwidman/bitbucket-issue-migration/issues/45
+        status_url = push_respo.json()['url']
+        resp = verify_github_issue_import_finished(
+            status_url, options.gh_auth, headers)
+
+        # Verify GH & BB issue IDs match.
+        # If this assertion fails, convert_links() will have incorrect
+        # output.  This condition occurs when:
+        # - the GH repository has pre-existing issues.
+        # - the Bitbucket repository has gaps in the numbering.
+        if resp:
+            gh_issue_url = resp.json()['issue_url']
+            gh_issue_id = int(gh_issue_url.split('/')[-1])
+            if gh_issue_id != issue_id:
+                abort.set()
+                raise Exception(
+                    "Issues are out of sync, got github issue {} but "
+                    "bitbucket issue is at {}".format(gh_issue_id, issue_id))
+        print("Completed {} issues".format(num_issues))
 
 
 class DummyIssue(dict):
@@ -993,7 +1044,7 @@ def verify_github_issue_import_finished(status_url, auth, headers):
         status = respo.json()['status']
         if status != 'pending':
             break
-        time.sleep(1)
+        time.sleep(.5)
     if status == 'imported':
         print("Imported Issue:", respo.json()['issue_url'])
     elif status == 'failed':
