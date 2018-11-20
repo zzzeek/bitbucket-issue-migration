@@ -311,8 +311,7 @@ def main(options):
             (issue['id'], gh_issue, gh_comments)
         )
 
-    abort_event.set()
-    worker_thread.join()
+    work_queue.join()
 
 
 def push_issues(abort, work_queue, github_repo, gh_auth, headers, dry_run):
