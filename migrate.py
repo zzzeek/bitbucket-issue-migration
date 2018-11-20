@@ -716,6 +716,9 @@ def format_comment_body(comment, options, templates):
 def format_change_body(change, options, templates):
     author = change['user']
 
+    # TODO: format this in terms of: "removed labels:...   added labels: ..."
+    # because these are labels now!
+
     def format_element_keyword(keyword):
         # try to disambiguate between a change of description / content
         # and a more common change of a keyword
