@@ -135,12 +135,12 @@ def convert_comment(comment, options, config):
     }
 
 
-def convert_change(change, options, config, gh, is_last):
+def convert_change(change, options, config, gh):
     """
     Convert an issue comment from Bitbucket schema to GitHub's Issue Import API
     schema.
     """
-    body = format_change_body(change, options, config, gh, is_last)
+    body = format_change_body(change, options, config, gh)
     if not body:
         return None
     return {
@@ -207,7 +207,7 @@ def format_comment_body(comment, options, config):
     return template.format(**data)
 
 
-def format_change_body(change, options, config, gh, is_last):
+def format_change_body(change, options, config, gh):
     author = change['user']
 
     # bb sneaked in an "assignee_account_id" that's not in their spec...
@@ -259,7 +259,7 @@ def format_change_body(change, options, config, gh, is_last):
                     old in ('resolved', 'duplicate', 'wontfix', 'closed'):
                 status_changes.add("reopened")
 
-            if not is_last and old in ('open', 'new', 'on hold') and \
+            if old in ('open', 'new', 'on hold') and \
                     new in ('resolved', 'duplicate', 'wontfix', 'closed'):
                 status_changes.add("closed")
         elif change_element == "content":

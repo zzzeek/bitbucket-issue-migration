@@ -205,11 +205,10 @@ def main(argv=None):
         ]
 
         if options.mention_changes and changes:
-            last_change = changes[-1]
             gh_comments += [
                 converted_change for converted_change in
-                [convert.convert_change(c, options, config, gh,
-                 c is last_change) for c in changes]
+                [convert.convert_change(c, options, config, gh)
+                 for c in changes]
                 if converted_change
             ]
 
@@ -218,7 +217,9 @@ def main(argv=None):
             gh_comments.append(
                 {
                     'created_at': gh_issue['closed_at'],
-                    'body': "Legacy issue missing change notes",
+                    'body': "**note**: this imported issue does not include "
+                    "its status change history, which failed to be exported "
+                    "from the legacy system.",
                 }
             )
 
