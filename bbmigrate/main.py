@@ -213,6 +213,8 @@ def main(argv=None):
                 if converted_change
             ]
 
+        convert._zzzeeks_specific_milestone_fixer(gh, gh_issue, gh_comments)
+
         print("Queuing bitbucket issue {} for export".format(issue['id']))
         work_queue.put((issue['id'], gh_issue, gh_comments))
 

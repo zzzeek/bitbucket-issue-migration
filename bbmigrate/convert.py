@@ -452,3 +452,34 @@ def convert_users(content, options):
     return MENTION_RE.sub(replace_user, content)
 
 
+def _zzzeeks_specific_milestone_fixer(gh, gh_issue, gh_comments):
+    """undo a mistake I made in bitbucket years ago, where I removed the
+    milestones from thousands of issues.  Read it in from the comment that
+    says "removed milestone XYZ" and put it back.
+
+    This function has nothing to do with what anyone would want this tool
+    to do, unless it was generically customizable.
+
+    """
+
+    # NOTE: an assumption here is that the "change" comment will follow
+    # after the "comment" comment that matches the regexp
+
+    removed_milestone = also_remove = None
+    new_comments = []
+    for comment in gh_comments:
+        match = re.match(
+            r".*Removing milestone: (.+?) \(automated comment\)",
+            comment['body'], re.S)
+        if match:
+            removed_milestone = match.group(1)
+            also_remove = 'removed **milestone** (was: "{}")'.format(
+                removed_milestone)
+        else:
+            if also_remove is None or also_remove not in comment['body']:
+                new_comments.append(comment)
+
+    if removed_milestone:
+        gh_issue['milestone'] = gh.ensure_milestone(removed_milestone)
+
+        gh_comments[:] = new_comments
