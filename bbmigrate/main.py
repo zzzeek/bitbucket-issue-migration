@@ -213,6 +213,15 @@ def main(argv=None):
                 if converted_change
             ]
 
+        if options.mention_changes and not changes and \
+                gh_issue.get('closed_at'):
+            gh_comments.append(
+                {
+                    'created_at': gh_issue['closed_at'],
+                    'body': "Legacy issue missing change notes",
+                }
+            )
+
         convert._zzzeeks_specific_milestone_fixer(gh, gh_issue, gh_comments)
 
         print("Queuing bitbucket issue {} for export".format(issue['id']))

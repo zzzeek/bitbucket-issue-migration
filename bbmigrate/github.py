@@ -270,6 +270,7 @@ class GitHub(Client):
                 "status: '{}'".format(status)
             )
 
+
 class AttachmentsRepo:
     def __init__(self, repo, options):
 
