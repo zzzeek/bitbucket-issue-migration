@@ -25,7 +25,12 @@ API, it is not known if this API will remain available or be changed or what.
 Here's how I'm importing issues into a test GitHub repo from a SQLAlchemy
 export:
 
-    bbmigrate --use-config mikes_config.yml /home/classic/sqla_bb_issue_export.d3.zip sqlalchemy-bot/test_sqlalchemy sqlalchemy-bot --mention-changes --git-ssh-identity /home/classic/.ssh/sqlalchemy_bot_rsa --attachments-wiki
+    bbmigrate --use-config mikes_config.yml \
+      /home/classic/sqla_bb_issue_export.d3.zip \
+      sqlalchemy-bot/test_sqlalchemy sqlalchemy-bot \
+      --mention-changes \
+      --git-ssh-identity /home/classic/.ssh/sqlalchemy_bot_rsa \
+      --attachments-wiki
 
 Users of the original Bitbucket migration script will note this looks completely
 different.
