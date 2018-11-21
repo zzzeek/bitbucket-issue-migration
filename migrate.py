@@ -966,8 +966,10 @@ class AttachmentsRepo:
         self.dest = tempfile.mkdtemp()
 
         if options.git_ssh_identity:
-            os.environ['GIT_SSH_COMMAND'] = 'ssh -i {}'.format(
-                options.git_ssh_identity)
+            os.environ['GIT_SSH_COMMAND'] = (
+                'ssh -o IdentitiesOnly=yes -i {}'.
+                format(options.git_ssh_identity)
+            )
 
         print("Cloning {} into {}...".format(self.git_url, self.dest))
         with self._chdir_as(self.dest):
