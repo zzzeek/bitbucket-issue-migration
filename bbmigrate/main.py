@@ -81,8 +81,11 @@ def _read_arguments(argv):
     parser.add_argument(
         "-f", "--skip", type=int, default=0,
         help=(
-            "The number of Bitbucket issues to skip. Note that if Bitbucket "
-            "issues were deleted, they are already automatically skipped."
+            "Highest issue number in the Github repo.  The import can only "
+            "start with the next number right above this one."
+            "Because it can only be that one value, it is automatically "
+            "determined and there is no need to set it unless testing in "
+            "dry-run mode."
         )
     )
 

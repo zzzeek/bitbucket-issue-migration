@@ -41,6 +41,12 @@ class GitHub(Client):
         self.repo = options.github_repo
         self._load_milestones()
         self._load_labels()
+        if not options.skip:
+            options.skip = self._get_current_offset()
+            if options.skip:
+                print(
+                    "Detected highest issue number in the "
+                    "github repo as {}, setting offset".format(options.skip))
 
     def _login(self):
         options = self.options
@@ -90,6 +96,21 @@ class GitHub(Client):
                 "Repo name does not match that one "
                 "sent: {} != {}.  Was this repo renamed?".
                 format(options.github_repo, full_name))
+
+    def _get_current_offset(self):
+        url = (
+            "https://api.github.com/repos/{repo}/issues"
+            "?sort=number&direction=desc&state=all".format(
+                repo=self.repo)
+        )
+        resp = self._expect_200(
+            self._api_call(self.session.get, url), url
+        )
+        json = resp.json()
+        if json:
+            return json[0]['number']
+        else:
+            return 0
 
     def _load_milestones(self):
         self.milestones = {}
