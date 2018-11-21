@@ -16,6 +16,7 @@
 
 import requests
 import warnings
+import time
 
 from .base import Client
 from .base import keyring
@@ -171,8 +172,20 @@ class Bitbucket(Client):
         # this seems to be in val['links']['self']['href'][0] also
         content_url = "{}/{}/attachments/{}".format(
             self.url, issue_num, filename)
-        content = self._expect_200(
-            requests.get(content_url, auth=self.auth),
-            content_url
-        )
+        for retry in range(5):
+            content = self._expect_200(
+                requests.get(content_url, auth=self.auth),
+                content_url, warn=(403,)
+            )
+            if content.status_code == 403:
+                warnings.warn(
+                    "Got a 403 from %s, waiting a few seconds then "
+                    "trying again" % content_url)
+                time.sleep(5)
+                continue
+            else:
+                break
+        else:
+            return "Couldn't download attachment: %s" % content_url
+
         return content.content

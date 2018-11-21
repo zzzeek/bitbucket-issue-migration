@@ -30,7 +30,7 @@ class Client:
             if warn and response.status_code in warn:
                 return response
             raise RuntimeError(
-                "Failed to get issue comments from: {} due to unexpected HTTP "
+                "Failed to call API URL {} due to unexpected HTTP "
                 "status code: {}"
                 .format(url, response.status_code)
             )
