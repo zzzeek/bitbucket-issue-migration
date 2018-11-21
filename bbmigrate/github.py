@@ -31,6 +31,8 @@ from .base import keyring
 class GitHub(Client):
     # GitHub's Import API currently requires a special header
     headers = {'Accept': 'application/vnd.github.golden-comet-preview+json'}
+    _last_push_time = 0
+    _rate_limit = None
 
     def __init__(self, config, options):
         self.config = config
@@ -39,7 +41,6 @@ class GitHub(Client):
         self.repo = options.github_repo
         self._load_milestones()
         self._load_labels()
-        self._last_push_time = 0
 
     def _login(self):
         options = self.options
@@ -79,8 +80,10 @@ class GitHub(Client):
         self.session = requests.Session()
         self.session.auth = options.gh_auth
         self.session.headers.update(self.headers)
-
-        response = self._expect_200(self.session.get(gh_repo_url), gh_repo_url)
+        self.session.hooks["response"].append(self._update_rate_limit)
+        response = self._expect_200(
+            self._api_call(self.session.get, gh_repo_url), gh_repo_url
+        )
         full_name = response.json()['full_name']
         if full_name != options.github_repo:
             raise Exception(
@@ -94,7 +97,9 @@ class GitHub(Client):
             'https://api.github.com/repos/{repo}/milestones?state=all'.\
             format(repo=self.repo)
         while url:
-            respo = self._expect_200(self.session.get(url), url)
+            respo = self._expect_200(
+                self._api_call(self.session.get, url), url
+            )
             for m in respo.json():
                 self.milestones[m['title']] = m['number']
             if "next" in respo.links:
@@ -109,7 +114,10 @@ class GitHub(Client):
             'https://api.github.com/repos/{repo}/labels?state=all'.\
             format(repo=self.repo)
         while url:
-            respo = self._expect_200(self.session.get(url), url)
+            respo = self._expect_200(
+                self._api_call(self.session.get, url), url
+            )
+
             for m in respo.json():
                 self.labels.add(m['name'])
             if "next" in respo.links:
@@ -139,9 +147,11 @@ class GitHub(Client):
         if self.options.dry_run:
             return
 
-        respo = self.session.post(
+        respo = self._api_call(
+            self.session.post,
             self._label_url,
-            json={"name": name, "color": self._random_web_color()})
+            json={"name": name, "color": self._random_web_color()}
+        )
         if respo.status_code != 201:
             raise RuntimeError(
                 "Failed to create label due to HTTP status code: {}".
@@ -162,20 +172,74 @@ class GitHub(Client):
         if self.options.dry_run:
             return random.randint(1000000)
 
-        respo = self.session.post(self._milestone_url, json={"title": title})
+        respo = self._api_call(
+            self.session.post,
+            self._milestone_url, json={"title": title}
+        )
         if respo.status_code != 201:
             raise RuntimeError(
                 "Failed to get milestones due to HTTP status code: {}".
                 format(respo.status_code))
         return respo.json()["number"]
 
+    def _update_rate_limit(self, resp, *args, **kw):
+        now = time.time()
+        if self._rate_limit is None or now - self._rate_limit['last'] > 60:
+            self._rate_limit = {
+                "limit": int(resp.headers['X-RateLimit-Limit']),
+                "remaining": int(resp.headers['X-RateLimit-Remaining']),
+                "reset": int(resp.headers["X-RateLimit-Reset"]),
+                "last": time.time(),
+            }
+
+            if self._rate_limit["remaining"] <= 100:
+                print(
+                    "WARNING!  Only {} API calls left for the next {} "
+                    "seconds; going to wait that many seconds...".format(
+                        self._rate_limit["remaining"],
+                        self._rate_limit["reset"] - self._rate_limit["last"]
+                    )
+                )
+                seconds = self._rate_limit["reset"] - self._rate_limit["last"]
+                while seconds > 0:
+                    print("Sleeping....{} seconds remaining".format(seconds))
+                    time.sleep(30)
+                    seconds -= 30
+                print("OK done sleeping, let's hope it reset")
+                # return so the next API call will come back here and
+                # update rate limit again
+                return
+
+            self._rate_limit['rate_per_sec'] = (
+                self._rate_limit['remaining'] /
+                (self._rate_limit['reset'] - self._rate_limit['last'])
+            )
+
+            print(
+                "Refreshed github rate limit.  {} requests out "
+                "of {} remaining, until {} seconds from now.   Will run "
+                "API calls at {} requests per second".format(
+                    self._rate_limit['remaining'],
+                    self._rate_limit['limit'],
+                    self._rate_limit["reset"] - self._rate_limit["last"],
+                    self._rate_limit["rate_per_sec"]
+                ))
+
     def _wait_for_api(self):
+        if self._rate_limit is None:
+            return
         now = time.time()
         if self._last_push_time:
-            sleep_for = 1 - (now - self._last_push_time)
+            time_passed = now - self._last_push_time
+            delay = 1 / self._rate_limit['rate_per_sec']
+            sleep_for = delay - time_passed
             if sleep_for > 0:
                 time.sleep(sleep_for)
         self._last_push_time = time.time()
+
+    def _api_call(self, fn, url, *arg, **kw):
+        self._wait_for_api()
+        return fn(url, *arg, **kw)
 
     def push_github_issue(self, issue, comments, verify_issue_id):
         """
@@ -195,8 +259,7 @@ class GitHub(Client):
         issue_data = {'issue': issue, 'comments': comments}
         url = 'https://api.github.com/repos/{repo}/import/issues'.format(
             repo=self.repo)
-        self._wait_for_api()
-        push_respo = self.session.post(url, json=issue_data)
+        push_respo = self._api_call(self.session.post, url, json=issue_data)
         if push_respo.status_code == 422:
             raise RuntimeError(
                 "Initial import validation failed for issue '{}' due to the "
@@ -235,8 +298,12 @@ class GitHub(Client):
         is either 'imported' or 'failed'.
         """
         while True:
-            self._wait_for_api()
-            respo = self.session.get(status_url)
+            # note rate limiting is already slowing us down if needed,
+            # but for status checks we still need a slight delay between
+            # checks if the first one didn't go through
+            time.sleep(1)
+
+            respo = self._api_call(self.session.get, status_url)
             if respo.status_code in (403, 404):
                 print(respo.status_code, "retrieving status URL", status_url)
                 respo.status_code == 404 and print(
@@ -255,6 +322,10 @@ class GitHub(Client):
             status = respo.json()['status']
             if status != 'pending':
                 break
+
+            print("Still waiting for verified status on {}...".format(
+                verify_issue_id))
+
         if status == 'imported':
             # Verify GH & BB issue IDs match.
             # If this assertion fails, convert_links() will have incorrect
