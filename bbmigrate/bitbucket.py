@@ -14,9 +14,11 @@
 # along with the Bitbucket issue migration script.
 # If not, see <http://www.gnu.org/licenses/>.
 
+import collections
 import getpass
 import itertools
 import json
+import os
 import requests
 import warnings
 import time
@@ -294,25 +296,40 @@ class BitbucketExport(Client):
 
         }
 
+    def _rename_for_dupes(self, attachment_recs):
+        names = collections.defaultdict(int)
+        for rec in attachment_recs:
+            name = rec['filename']
+            if names[name] > 0:
+                fname, ext = os.path.splitext(name)
+                rec["filename"] = "%s.%s%s" % (fname, names[name], ext)
+            names[name] += 1
+
+        return attachment_recs
+
     def get_attachments(self, issue_id):
-        recs = [
+        recs = self._rename_for_dupes([
             rec for rec in self.db['attachments'] if rec["issue"] ==
-            issue_id]
+            issue_id])
+
         # this is just for deterministic sorting, the paths
         # are hashes
         recs = sorted(recs, key=lambda rec: rec["path"])
         return [{"name": rec["filename"]} for rec in recs]
 
     def get_attachment(self, issue_id, filename):
-        recs = [
-            rec for rec in self.db['attachments']
-            if rec["issue"] == issue_id and rec["filename"] == filename
-        ]
-        if len(recs) != 1:
+        recs = self._rename_for_dupes([
+            rec for rec in self.db['attachments'] if rec["issue"] ==
+            issue_id])
+
+        for rec in recs:
+            if rec["filename"] == filename:
+                with self.zipfile.open(rec["path"], 'r') as file_:
+                    return file_.read()
+                break
+        else:
             raise RuntimeError(
                 "Can't find a unique attachment for {} {}, got {}".format(
                     issue_id, filename, repr(recs)
                 )
             )
-        with self.zipfile.open(recs[0]["path"], 'r') as file_:
-            return file_.read()
