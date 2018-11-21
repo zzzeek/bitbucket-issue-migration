@@ -244,7 +244,7 @@ def push_issues(abort, work_queue, gh):
 
         # keep one second between API requests per githubs rate limiting
         # advice
-        time.sleep(.5)
+        time.sleep(1)
 
         try:
             gh.push_github_issue(gh_issue, gh_comments, issue_id)

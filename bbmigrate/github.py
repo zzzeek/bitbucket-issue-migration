@@ -243,7 +243,7 @@ class GitHub(Client):
             status = respo.json()['status']
             if status != 'pending':
                 break
-            time.sleep(.5)
+            time.sleep(1)
         if status == 'imported':
             # Verify GH & BB issue IDs match.
             # If this assertion fails, convert_links() will have incorrect
