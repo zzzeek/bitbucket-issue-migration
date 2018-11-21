@@ -307,9 +307,15 @@ class AttachmentsRepo:
 
     def commit(self, issue_num):
         with self._chdir_as(self.repo_path):
-            self._run_cmd(
-                "git", "commit", "-m",
-                "Imported attachments for issue {}".format(issue_num))
+            try:
+                self._run_cmd(
+                    "git", "commit", "-m",
+                    "Imported attachments for issue {}".format(issue_num))
+            except subprocess.CalledProcessError:
+                # HACK: for the moment, we aren't checking if the file
+                # is already there which means git commit returns
+                # a zero status code, just ignore
+                pass
 
     def push(self):
         with self._chdir_as(self.repo_path):
