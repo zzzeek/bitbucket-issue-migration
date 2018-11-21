@@ -4,24 +4,11 @@ This is a small script that will migrate Bitbucket issues to a GitHub project.
 
 It will import issues (and close them as needed) and their comments.
 Repositories can be public or private, owned by individuals or organizations.
-Labels and milestones are supported.
-
-## Before running:
-
-Requires Python 3 and the [`requests`](http://requests.readthedocs.org/) library.
-[`keyring`](https://pypi.python.org/pypi/keyring) is an optional
-dependency if you want to pull login credentials from the system keyring.
-
-It's probably easiest to install the dependencies using Python 3's built-in
-`venv` tool:
-
-    $ pyvenv ./py3
-    $ source ./py3/bin/activate
-    $ pip3 install -r requirements.pip
+Labels, milestones, and attachments are supported.
 
 ## Parameters:
 
-    $ python3 migrate.py -h
+    $ bbmigrate -h
     usage: migrate.py [-h] [-bu BITBUCKET_USERNAME] [-n] [-f SKIP] [-m _MAP_USERS]
                       bitbucket_repo github_repo github_username
 
@@ -73,7 +60,7 @@ It's probably easiest to install the dependencies using Python 3's built-in
 
 For example, to export the SQLAlchemy issue tracker to the repo https://github.com/jeffwidman/testing:
 
-    $ python3 migrate.py zzzeek/sqlalchemy jeffwidman/testing jeffwidman
+    $ bbmigrate zzzeek/sqlalchemy jeffwidman/testing jeffwidman
 
 ## Additional notes:
 
@@ -113,5 +100,8 @@ imposed by GitHub's
   you do "create the first page" and "save" on the "Home.md" at least.
 
 
-Currently maintained by [Jeff Widman](http://www.jeffwidman.com/).
+This is a personal fork of the original tool, developed by
+[Mike Bayer](https://github.com/zzzeek).
+
+The "public" version of the application is maintained by [Jeff Widman](http://www.jeffwidman.com/).
 Originally written and open-sourced by [Vitaly Babiy](https://github.com/vbabiy).
