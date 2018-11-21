@@ -1,114 +1,84 @@
 # Bitbucket Issues Migration
 
-This is a small script that will migrate Bitbucket issues to a GitHub project.
+This is an application that migrates Bitbucket issues to a GitHub project.
+In theory it also provides the basis for migrating Bitbucket to any sort of
+label-oriented issue tracker, e.g. Gogs, Gitea, however currently the only
+target is GitHub.
 
-It will import issues (and close them as needed) and their comments.
-Repositories can be public or private, owned by individuals or organizations.
-Labels, milestones, and attachments are supported.
+This is a fork by Mike Bayer which highly modifies the project at
+https://github.com/jeffwidman/bitbucket-issue-migration to include a lot
+more features.    Pull requests have been made back to the upstream project
+however the architecture here has changed significantly.
 
-Uses the Bitbucket 2.0 API **or** a zipfile from the Bitbucket export API.
-The export file works **much** better, it is fully accurate and no latency.
-There are many bugs in the 2.0 API still with the "changes" API call
-frequently failing, it also does not include when attachments were added.
+The source of issues is the Bitbucket 2.0 API, or preferably, the zipfile
+that you get from exporting your issues from your Bitbucket project, which
+is a lot more reliable and accurate, not to mention very fast.
 
-## Parameters:
+The destination is GitHubs not-official not-publicized not-really-maintained-but-
+barely-good-enough issue import API illustrated at this one Gist, and nowhere
+else:  https://gist.github.com/jonmagic/5282384165e0f86ef105.    Given that
+GitHub seems to have a very tenuous committment to having a real issue import
+API, it is not known if this API will remain available or be changed or what.
 
-    $ bbmigrate -h
-    usage: migrate.py [-h] [-bu BITBUCKET_USERNAME] [-n] [-f SKIP] [-m _MAP_USERS]
-                      bitbucket_repo github_repo github_username
+## Usage:
 
-    A tool to migrate issues from Bitbucket to GitHub.
+Here's how I'm importing issues into a test GitHub repo from a SQLAlchemy
+export:
 
-    positional arguments:
-      bitbucket_repo        Bitbucket repository to pull issues from.
-                            This can be a repo to access via the API or
-                            the path to a .zip file from the export API.
-                            **zipfile strongly recommended, much more accurate**
-                            Format: <user or organization name>/<repo name>
-                            Example: jeffwidman/bitbucket-issue-migration
+  bbmigrate --use-config mikes_config.yml /home/classic/sqla_bb_issue_export.d3.zip sqlalchemy-bot/test_sqlalchemy sqlalchemy-bot --mention-changes --git-ssh-identity /home/classic/.ssh/sqlalchemy_bot_rsa --attachments-wiki
 
-                            Format: <path>.zip
-                            Example: /path/to/file.zip
+Users of the original Bitbucket migration script will note this looks completely
+different.
 
-      github_repo           GitHub repository to add issues to.
-                            Format: <user or organization name>/<repo name>
-                            Example: jeffwidman/bitbucket-issue-migration
+The configuration allows one to customize how issues, comments, attachment
+messages, etc. are formatted, as well as a translation map of Bitbucket
+"label" names to GitHub labels.   For example, Bitbucket forces every
+issue to have a "priority" which defaults to "major".  It's kind of tedious
+then to have thousands of issues that all say "major" on them, so the
+mapping allows you to translate "major" to nothing.    It also allows you to
+correct for strange Bitbucket decisions like "priority=trivial" vs.
+"priority=blocker", one is about how difficult the issue is and the other is
+about how important it is, so I map "priority=trivial" to the label "easy".
 
-      github_username       Your GitHub username. This is used only for
-                            authentication, not for the repository location.
+The script works around GitHub's egregious and admitted lack of any way of
+automating the attachment of files to issues by adding the attachments
+to your project's wiki.   This feature is enabled by adding --attachments-wiki
+to the command line, and then making sure your GitHub project has a wiki
+enabled and created.   It pulls down the wiki via git and pushes files back
+up to the project, which are then linked from the issues.   The links themselves
+are relative links so that the name of the repository isn't hardcoded in them.
 
-    optional arguments:
-      -h, --help            show this help message and exit
+For authentication, you're going to want to use the "keyring" application
+which is installed by the requirements here.   Add your GitHub password to
+it like this:
 
-      -bu BITBUCKET_USERNAME, --bb-user BITBUCKET_USERNAME
-                            Your Bitbucket username. This is only necessary when
-                            migrating private Bitbucket repositories.
+    /path/to/virtualenv/bin/keyring set GitHub <your username>
 
-      -n, --dry-run         Simulate issue migration to confirm issues can be
-                            extracted from Bitbucket and converted by this script.
-                            Nothing will be copied to GitHub.
+It will ask for your password, which it then stores in some kind of we would
+assume non-plaintext way (or who knows).   The script here then uses that
+keyring to set up an authenticated session with GitHub.  You definitely need
+to do this because GitHub has very low rate limits if you are not logged in.
 
-      -f SKIP, --skip SKIP  The number of Bitbucket issues to skip. Note that if
-                            Bitbucket issues were deleted, they are already
-                            automatically skipped.
+After the script uses your login to have an authenticated session, it's doing
+all the best practices of looking at GitHub's rate limit headers in the
+requests and adjusting how many API calls it makes per second.   The speed of
+import is already limited by the  fact that we need to push one issue at a
+time, so that they come out numerically in the same order as those of your
+Bitbucket issue tracker.
 
-      -m _MAP_USERS, --map-user _MAP_USERS
-                            Override user mapping for usernames, for example
-                            `--map-user fk=fkrull`. Can be specified multiple
-                            times.
+As many other things as possible "just work", such as, milestones being
+transferred, usernames are looked up in GitHub to provide a link, comments
+and issue content are rewritten as best as possible to follow GitHubs formatting
+and issue linking conventions.
 
-      --skip-attribution-for BB_SKIP
-                            BitBucket user who doesn't need comments re-
-                            attributed. Useful to skip your own comments, because
-                            you are running this script, and the GitHub comments
-                            will be already under your name.
+The script also **is** idempotent - if it crashes, due to hitting the rate limit
+(which it shouldn't) or because of some other issue accessing APIs, the first
+thing it does when you run it again is it looks up the highest issue number
+in the GitHub repo and starts there again.
 
-      --link-changesets     Link changeset references back to BitBucket.
-
-    $ python3 migrate.py <bitbucket_repo> <github_repo> <github_username>
-
-## Example:
-
-For example, to export the SQLAlchemy issue tracker to the repo https://github.com/jeffwidman/testing:
-
-    $ bbmigrate zzzeek/sqlalchemy jeffwidman/testing jeffwidman
-
-## Additional notes:
-
-* GitHub labels are created that map to the Bitbucket issue's priority, kind
-(bug, task, etc), component (if any, custom to each project), and version (if
-any). If you don't want these, just delete the new GitHub labels post-migration.
-_(Note: GitHub limits label length to 50 characters. Labels longer than this will be truncated.)_
-
-* Milestones are transferred. If the milestone doesn't exist in GitHub, it will
-be created. If you don't want this, either edit the code (search for "milestone")
-or delete the milestones in GitHub after the migration.
-
-* The migrated issues and issue comments are annotated with both Bitbucket and
-GitHub links to user who authored the comment/issue. This assumes the user
-reused their Bitbucket username on GitHub.
-
-* Within the body of issues and issue comments, hyperlinks to other issues
-in this Bitbucket repo will be rewritten as `#<ID>`, which GitHub will
-automatically hyperlink to the GitHub issue with that particular ID. This
-assumes that you are migrating to a GitHub repository that has no existing
-issues, otherwise the imported issues will have a different ID on GitHub than
-on Bitbucket and the links will be incorrect. If you are migrating to a GitHub
-repo with existing issues, just edit the code to offset the imported issue IDs
-by the correct amount.
-
-* This script is not idempotent--re-running it will leave the first set of
-imported issues intact, and then create a duplicate set of imported issues after
-the first set. If you want to re-run the import, it's best to delete your GitHub
-repo and start over so that the GitHub issue IDs start from 1.
-
-* The maximum allowable size per individual issue is 1MB. This limit is
-imposed by GitHub's
-[Import API](https://gist.github.com/jonmagic/5282384165e0f86ef105).
-
-* the --attachments-wiki option will add attachments to your git repo's
-  wiki.  For this to work, the wiki has to exist, so make sure on the wiki
-  you do "create the first page" and "save" on the "Home.md" at least.
+When importing issues, you will want the repo to have the git source of
+your application already available, as it seems that GitHub's hyperlinking
+of changesets doesn't occur after the fact (or at least it didn't seem to).
 
 
 This is a personal fork of the original tool, developed by
