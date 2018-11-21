@@ -161,89 +161,421 @@ def read_arguments():
     return parser.parse_args()
 
 
-def main(options):
-    """Main entry point for the script."""
-    bb_url = "https://api.bitbucket.org/2.0/repositories/{repo}/issues".format(
-        repo=options.bitbucket_repo)
-    options.bb_auth = None
-    options.users = dict(user.split('=') for user in options._map_users)
-    bb_repo_status = requests.head(bb_url).status_code
-    if bb_repo_status == 404:
-        raise RuntimeError(
-            "Could not find a Bitbucket Issue Tracker at: {}\n"
-            "Hint: the Bitbucket repository name is case-sensitive."
-            .format(bb_url)
-        )
-    elif bb_repo_status == 403:  # Only need BB auth creds for private BB repos
-        if not options.bitbucket_username:
+class Client:
+    def _expect_200(self, response, url, warn=None):
+        if response.status_code != 200:
+            if warn and response.status_code in warn:
+                return response
             raise RuntimeError(
-                """
-                Trying to access a private Bitbucket repository, but no
-                Bitbucket username was entered. Please rerun the script using
-                the argument `--bb-user <username>` to pass in your Bitbucket
-                username.
-                """
+                "Failed to get issue comments from: {} due to unexpected HTTP "
+                "status code: {}"
+                .format(url, response.status_code)
             )
-        kr_pass_bb = keyring.get_password(
-            'Bitbucket', options.bitbucket_username)
-        bitbucket_password = kr_pass_bb or getpass.getpass(
-            "Please enter your Bitbucket password.\n"
-            "Note: If your Bitbucket account has two-factor authentication "
-            "enabled, you must temporarily disable it until "
-            "https://bitbucket.org/site/master/issues/11774/ is resolved.\n"
+        return response
+
+
+class Bitbucket(Client):
+    def __init__(self, config, options):
+        self.config = config
+        self.options = options
+        self._login()
+        self.auth = options.bb_auth
+
+    def _login(self):
+        self.url = bb_url = (
+            "https://api.bitbucket.org/2.0/repositories/{repo}/issues".
+            format(repo=options.bitbucket_repo)
         )
-        options.bb_auth = (options.bitbucket_username, bitbucket_password)
-        # Verify BB creds work
-        bb_creds_status = requests.head(
-            bb_url, auth=options.bb_auth).status_code
-        if bb_creds_status == 401:
-            raise RuntimeError("Failed to login to Bitbucket.")
-        elif bb_creds_status == 403:
+        options.bb_auth = None
+        options.users = dict(user.split('=') for user in options._map_users)
+
+        bb_repo_status = requests.head(bb_url).status_code
+        if bb_repo_status == 404:
             raise RuntimeError(
-                "Bitbucket login succeeded, but user '{}' doesn't have "
-                "permission to access the url: {}"
-                .format(options.bitbucket_username, bb_url)
+                "Could not find a Bitbucket Issue Tracker at: {}\n"
+                "Hint: the Bitbucket repository name is case-sensitive."
+                .format(bb_url)
+            )
+        # Only need BB auth creds for private BB repos
+        elif bb_repo_status == 403:
+            if not options.bitbucket_username:
+                raise RuntimeError(
+                    """
+                    Trying to access a private Bitbucket repository, but no
+                    Bitbucket username was entered. Please rerun the script
+                    using the argument `--bb-user <username>` to pass in your
+                    Bitbucket username.
+                    """
+                )
+            kr_pass_bb = keyring.get_password(
+                'Bitbucket', options.bitbucket_username)
+            bitbucket_password = kr_pass_bb or getpass.getpass(
+                "Please enter your Bitbucket password.\n"
+                "Note: If your Bitbucket account has two-factor "
+                "authentication enabled, you must temporarily disable it "
+                "until https://bitbucket.org/site/master/issues/11774/ is "
+                "resolved.\n"
+            )
+            options.bb_auth = (options.bitbucket_username, bitbucket_password)
+            # Verify BB creds work
+            bb_creds_status = requests.head(
+                bb_url, auth=options.bb_auth).status_code
+            if bb_creds_status == 401:
+                raise RuntimeError("Failed to login to Bitbucket.")
+            elif bb_creds_status == 403:
+                raise RuntimeError(
+                    "Bitbucket login succeeded, but user '{}' doesn't have "
+                    "permission to access the url: {}"
+                    .format(options.bitbucket_username, bb_url)
+                )
+
+    def get_issues(self, offset):
+        """Fetch the issues from Bitbucket."""
+
+        next_url = self.url
+
+        params = {"sort": "id"}
+        if offset:
+            params['q'] = "id > {}".format(offset)
+
+        while next_url is not None:
+            respo = self._expect_200(
+                requests.get(next_url, auth=self.auth, params=params),
+                next_url
+            )
+            result = respo.json()
+
+            if result['size'] == 0:
+                break
+
+            print(
+                "Retrieving issues in batches of {}, total number "
+                "of issues {}, receiving {} to {}".format(
+                    result['pagelen'], result['size'],
+                    (result['page'] - 1) * result['pagelen'] + 1,
+                    result['page'] * result['pagelen'],
+                ))
+
+            next_url = result.get('next', None)
+
+            for issue in result['values']:
+                yield issue
+
+    def get_issue_comments(self, issue_id):
+        """Fetch the comments for the specified Bitbucket issue."""
+
+        next_url = "{bb_url}/{issue_id}/comments/".format(
+            bb_url=self.url,
+            issue_id=issue_id
+        )
+
+        comments = []
+
+        while next_url is not None:
+            respo = self._expect_200(
+                requests.get(next_url, auth=self.auth, params={"sort": "id"}),
+                next_url
+            )
+            rec = respo.json()
+            next_url = rec.get('next')
+            comments.extend(rec['values'])
+        return comments
+
+    def get_issue_changes(self, issue_id):
+        """Fetch the changes for the specified Bitbucket issue."""
+
+        next_url = "{bb_url}/{issue_id}/changes/".format(
+            bb_url=self.url,
+            issue_id=issue_id
+        )
+
+        changes = []
+
+        while next_url is not None:
+            respo = self._expect_200(
+                requests.get(next_url, auth=self.auth, params={"sort": "id"}),
+                next_url, warn=(500,)
+            )
+            # unfortunately, BB's v 2.0 API seems to be 500'ing on some of
+            # these but it does not seem to suggest the whole system isn't
+            # working
+            if respo.status_code == 500:
+                warnings.warn(
+                    "Failed to get issue changes from {} due to "
+                    "semi-expected HTTP status code: {}".format(
+                        next_url, respo.status_code)
+                )
+                return []
+            rec = respo.json()
+            next_url = rec.get('next')
+            changes.extend(rec['values'])
+        return changes
+
+    def get_attachments(self, issue_num):
+        url = "{}/{}/attachments".format(self.url, issue_num)
+        respo = self._expect_200(
+            requests.get(url, auth=self.auth), url
+        )
+        result = respo.json()
+        return result['values']
+
+    def get_attachment(self, issue_num, filename):
+        # this seems to be in val['links']['self']['href'][0] also
+        content_url = "{}/{}/attachments/{}".format(
+            self.url, issue_num, filename)
+        content = self._expect_200(
+            requests.get(content_url, auth=self.auth),
+            content_url
+        )
+        return content.content
+
+
+class GitHub(Client):
+    # GitHub's Import API currently requires a special header
+    headers = {'Accept': 'application/vnd.github.golden-comet-preview+json'}
+
+    def __init__(self, config, options):
+        self.config = config
+        self.options = options
+        self._login()
+        self.repo = options.github_repo
+        self._load_milestones()
+        self._load_labels()
+
+    def _login(self):
+        options = self.options
+        self.url = gh_repo_url = (
+            'https://api.github.com/repos/{}'.format(options.github_repo)
+        )
+
+        # Always need the GH pass so format_user() can verify links to GitHub
+        # user profiles don't 404. Auth'ing necessary to get higher GH rate
+        # limits.
+        kr_pass_gh = keyring.get_password('Github', options.github_username)
+        github_password = kr_pass_gh or getpass.getpass(
+            "Please enter your GitHub password.\n"
+            "Note: If your GitHub account has authentication enabled, "
+            "you must use a personal access token from "
+            "https://github.com/settings/tokens in place of a password for "
+            "this script.\n"
+        )
+        options.gh_auth = (options.github_username, github_password)
+        # Verify GH creds work
+        gh_repo_status = requests.head(
+            gh_repo_url, auth=options.gh_auth).status_code
+        if gh_repo_status == 401:
+            raise RuntimeError("Failed to login to GitHub.")
+        elif gh_repo_status == 403:
+            raise RuntimeError(
+                "GitHub login succeeded, but user '{}' either doesn't have "
+                "permission to access the repo at: {}\n"
+                "or is over their GitHub API rate limit.\n"
+                "You can read more about GitHub's API rate limiting policies "
+                "here: https://developer.github.com/v3/#rate-limiting"
+                .format(options.github_username, gh_repo_url)
+            )
+        elif gh_repo_status == 404:
+            raise RuntimeError(
+                "Could not find a GitHub repo at: " + gh_repo_url)
+        self.session = requests.Session()
+        self.session.auth = options.gh_auth
+        self.session.headers.update(self.headers)
+
+        response = self._expect_200(self.session.get(gh_repo_url), gh_repo_url)
+        full_name = response.json()['full_name']
+        if full_name != options.github_repo:
+            raise Exception(
+                "Repo name does not match that one "
+                "sent: {} != {}.  Was this repo renamed?".
+                format(options.github_repo, full_name))
+
+    def _load_milestones(self):
+        self.milestones = {}
+        self._milestone_url = url = \
+            'https://api.github.com/repos/{repo}/milestones?state=all'.\
+            format(repo=self.repo)
+        while url:
+            respo = self._expect_200(self.session.get(url), url)
+            for m in respo.json():
+                self.milestones[m['title']] = m['number']
+            if "next" in respo.links:
+                url = respo.links['next']['url']
+            else:
+                url = None
+
+    def _load_labels(self):
+        self.labels = set()
+        self.label_translations = self.config['label_translations']
+        self._label_url = url = \
+            'https://api.github.com/repos/{repo}/labels?state=all'.\
+            format(repo=self.repo)
+        while url:
+            respo = self._expect_200(self.session.get(url), url)
+            for m in respo.json():
+                self.labels.add(m['name'])
+            if "next" in respo.links:
+                url = respo.links['next']['url']
+            else:
+                url = None
+
+    def translate_label(self, label):
+        label = self.label_translations.get(label, label)
+        if label in (None, '(none)', "None"):
+            return None
+
+        label = label.replace(",", '')[:50]
+        return label
+
+    def ensure_labels(self, labels):
+        labels = {
+            self.translate_label(label) for label in labels}.difference([None])
+
+        for label in labels.difference(self.labels):
+            self._create_label(label)
+            self.labels.add(label)
+        return labels
+
+    def _create_label(self, name):
+        if self.options.dry_run:
+            return
+
+        respo = self.session.post(
+            self._label_url,
+            json={"name": name, "color": self._random_web_color()})
+        if respo.status_code != 201:
+            raise RuntimeError(
+                "Failed to create label due to HTTP status code: {}".
+                format(respo.status_code))
+
+    def _random_web_color(self):
+        r, g, b = [random.randint(0, 15) * 16 for i in range(3)]
+        return ('%02X%02X%02X' % (r, g, b))
+
+    def ensure_milestone(self, title):
+        number = self.milestones.get(title)
+        if number is None:
+            number = self._create_milestone(title)
+            self.milestones[title] = number
+        return number
+
+    def _create_milestone(self, title):
+        if self.options.dry_run:
+            return random.randint(1000000)
+
+        respo = self.session.post(self._milestone_url, json={"title": title})
+        if respo.status_code != 201:
+            raise RuntimeError(
+                "Failed to get milestones due to HTTP status code: {}".
+                format(respo.status_code))
+        return respo.json()["number"]
+
+    def push_github_issue(self, issue, comments, verify_issue_id):
+        """
+        Push a single issue to GitHub.
+
+        Importing via GitHub's normal Issue API quickly triggers anti-abuse
+        rate limits. So we use their dedicated Issue Import API instead:
+        https://gist.github.com/jonmagic/5282384165e0f86ef105
+        https://github.com/nicoddemus/bitbucket_issue_migration/issues/1
+        """
+
+        if self.options.dry_run:
+            print("\nIssue: ", issue)
+            print("\nComments: ", comments)
+            return
+
+        issue_data = {'issue': issue, 'comments': comments}
+        url = 'https://api.github.com/repos/{repo}/import/issues'.format(
+            repo=self.repo)
+        push_respo = self.session.post(url, json=issue_data)
+        if push_respo.status_code == 422:
+            raise RuntimeError(
+                "Initial import validation failed for issue '{}' due to the "
+                "following errors:\n{}".format(
+                    issue['title'], push_respo.json())
+            )
+        elif push_respo.status_code != 202:
+            raise RuntimeError(
+                "Failed to POST issue: '{}' "
+                "due to unexpected HTTP status code: {}"
+                .format(issue['title'], push_respo.status_code)
             )
 
-    # Always need the GH pass so format_user() can verify links to GitHub user
-    # profiles don't 404. Auth'ing necessary to get higher GH rate limits.
-    kr_pass_gh = keyring.get_password('Github', options.github_username)
-    github_password = kr_pass_gh or getpass.getpass(
-        "Please enter your GitHub password.\n"
-        "Note: If your GitHub account has authentication enabled, "
-        "you must use a personal access token from "
-        "https://github.com/settings/tokens in place of a password for this "
-        "script.\n"
-    )
-    options.gh_auth = (options.github_username, github_password)
-    # Verify GH creds work
-    gh_repo_url = 'https://api.github.com/repos/' + options.github_repo
-    gh_repo_status = requests.head(
-        gh_repo_url, auth=options.gh_auth).status_code
-    if gh_repo_status == 401:
-        raise RuntimeError("Failed to login to GitHub.")
-    elif gh_repo_status == 403:
-        raise RuntimeError(
-            "GitHub login succeeded, but user '{}' either doesn't have "
-            "permission to access the repo at: {}\n"
-            "or is over their GitHub API rate limit.\n"
-            "You can read more about GitHub's API rate limiting policies "
-            "here: https://developer.github.com/v3/#rate-limiting"
-            .format(options.github_username, gh_repo_url)
-        )
-    elif gh_repo_status == 404:
-        raise RuntimeError("Could not find a GitHub repo at: " + gh_repo_url)
+        # issue POSTed successfully, now verify the import finished before
+        # continuing. Otherwise, we risk issue IDs not being sync'd between
+        # Bitbucket and GitHub because GitHub processes the data in the
+        # background, so IDs can be out of order if two issues are POSTed
+        # and the latter finishes before the former. For example, if the
+        # former had a bunch more comments to be processed.
+        # https://github.com/jeffwidman/bitbucket-issue-migration/issues/45
+        status_url = push_respo.json()['url']
+        self._verify_github_issue_import_finished(verify_issue_id, status_url)
+
+    def _verify_github_issue_import_finished(
+            self, verify_issue_id, status_url):
+        """
+        Check the status of a GitHub issue import.
+
+        If the status is 'pending', it sleeps, then rechecks until the status
+        is either 'imported' or 'failed'.
+        """
+        while True:
+            respo = self.session.get(status_url)
+            if respo.status_code in (403, 404):
+                print(respo.status_code, "retrieving status URL", status_url)
+                respo.status_code == 404 and print(
+                    "GitHub sometimes inexplicably returns a 404 for the "
+                    "check url for a single issue even when the issue "
+                    "imports successfully. For details, see #77."
+                )
+                pprint.pprint(respo.headers)
+                return
+            if respo.status_code != 200:
+                raise RuntimeError(
+                    "Failed to check GitHub issue import status url: "
+                    "{} due to unexpected HTTP status code: {}"
+                    .format(status_url, respo.status_code)
+                )
+            status = respo.json()['status']
+            if status != 'pending':
+                break
+            time.sleep(.5)
+        if status == 'imported':
+            # Verify GH & BB issue IDs match.
+            # If this assertion fails, convert_links() will have incorrect
+            # output.  This condition occurs when:
+            # - the GH repository has pre-existing issues.
+            # - the Bitbucket repository has gaps in the numbering.
+            json = respo.json()
+            gh_issue_url = json['issue_url']
+            gh_issue_id = int(gh_issue_url.split('/')[-1])
+            if gh_issue_id != verify_issue_id:
+                raise Exception(
+                    "Issues are out of sync, got github issue {} but "
+                    "bitbucket issue is at {}".
+                    format(gh_issue_id, verify_issue_id))
+            print("Imported Issue:", json['issue_url'])
+        elif status == 'failed':
+            raise RuntimeError(
+                "Failed to import GitHub issue due to the following "
+                "errors:\n{}".format(respo.json())
+            )
+        else:
+            raise RuntimeError(
+                "Status check for GitHub issue import returned unexpected "
+                "status: '{}'".format(status)
+            )
+
+
+def main(options):
+    """Main entry point for the script."""
 
     with open(options.use_config, "r") as file_:
         config = yaml.load(file_)
 
-    # GitHub's Import API currently requires a special header
-    headers = {'Accept': 'application/vnd.github.golden-comet-preview+json'}
-    gh_milestones = GithubMilestones(
-        options.github_repo, options.gh_auth, headers)
-    gh_labels = GithubLabels(
-        config['label_translations'],
-        options.github_repo, options.gh_auth, headers)
+    bb = Bitbucket(config, options)
+
+    gh = GitHub(config, options)
 
     if options.attachments_wiki:
         if options.mention_attachments:
@@ -253,18 +585,14 @@ def main(options):
         attachments_repo = AttachmentsRepo(options.github_repo, options)
 
     print("getting issues from bitbucket")
-    issues_iterator = fill_gaps(
-        get_issues(bb_url, options.skip, options.bb_auth),
-        options.skip
-    )
+    issues_iterator = fill_gaps(bb.get_issues(options.skip), options.skip)
 
     abort_event = threading.Event()
 
     work_queue = queue.Queue()
     worker_thread = threading.Thread(
         target=push_issues,
-        args=(abort_event, work_queue, options.github_repo,
-              options.gh_auth, headers, options.dry_run)
+        args=(abort_event, work_queue, gh)
     )
     worker_thread.daemon = True
     worker_thread.start()
@@ -277,23 +605,21 @@ def main(options):
             comments = []
             changes = []
         else:
-            comments = get_issue_comments(issue['id'], bb_url, options.bb_auth)
-            changes = get_issue_changes(issue['id'], bb_url, options.bb_auth)
+            comments = bb.get_issue_comments(issue['id'])
+            changes = bb.get_issue_changes(issue['id'])
 
         if options.attachments_wiki:
             attachment_links = process_wiki_attachments(
-                issue['id'], bb_url, options.bb_auth,
-                options, attachments_repo
+                issue['id'], bb, options, attachments_repo
             )
         elif options.mention_attachments:
-            attachment_links = get_attachment_names(
-                issue['id'], bb_url, options.bb_auth)
+            attachment_links = get_attachment_names(issue['id'], bb)
         else:
             attachment_links = []
 
         gh_issue = convert_issue(
             issue, comments, changes,
-            options, attachment_links, gh_milestones, gh_labels, config
+            options, attachment_links, gh, config
         )
         gh_comments = [
             convert_comment(c, options, config) for c in comments
@@ -304,7 +630,7 @@ def main(options):
             last_change = changes[-1]
             gh_comments += [
                 converted_change for converted_change in
-                [convert_change(c, options, config, gh_labels,
+                [convert_change(c, options, config, gh,
                                 c is last_change)
                  for c in changes]
                 if converted_change
@@ -313,12 +639,11 @@ def main(options):
         print("Queuing bitbucket issue {} for export".format(issue['id']))
         work_queue.put((issue['id'], gh_issue, gh_comments))
 
-    work_queue.join()
+    if not abort_event.is_set():
+        work_queue.join()
 
 
-def push_issues(abort, work_queue, github_repo, gh_auth, headers, dry_run):
-    num_issues = 0
-
+def push_issues(abort, work_queue, gh):
     while not abort.is_set():
         try:
             issue_id, gh_issue, gh_comments = work_queue.get(timeout=3)
@@ -328,49 +653,17 @@ def push_issues(abort, work_queue, github_repo, gh_auth, headers, dry_run):
             else:
                 continue
 
-        num_issues += 1
-
         # keep one second between API requests per githubs rate limiting
         # advice
-        time.sleep(1)
+        time.sleep(.5)
 
-        if dry_run:
-            print("\nIssue: ", gh_issue)
-            print("\nComments: ", gh_comments)
-            continue
-
-        push_respo = push_github_issue(
-            gh_issue, gh_comments, options.github_repo,
-            options.gh_auth, headers
-        )
-
-        # issue POSTed successfully, now verify the import finished before
-        # continuing. Otherwise, we risk issue IDs not being sync'd between
-        # Bitbucket and GitHub because GitHub processes the data in the
-        # background, so IDs can be out of order if two issues are POSTed
-        # and the latter finishes before the former. For example, if the
-        # former had a bunch more comments to be processed.
-        # https://github.com/jeffwidman/bitbucket-issue-migration/issues/45
-        status_url = push_respo.json()['url']
-        resp = verify_github_issue_import_finished(
-            status_url, options.gh_auth, headers)
-
-        # Verify GH & BB issue IDs match.
-        # If this assertion fails, convert_links() will have incorrect
-        # output.  This condition occurs when:
-        # - the GH repository has pre-existing issues.
-        # - the Bitbucket repository has gaps in the numbering.
-        if resp:
-            gh_issue_url = resp.json()['issue_url']
-            gh_issue_id = int(gh_issue_url.split('/')[-1])
-            if gh_issue_id != issue_id:
-                abort.set()
-                raise Exception(
-                    "Issues are out of sync, got github issue {} but "
-                    "bitbucket issue is at {}".format(gh_issue_id, issue_id))
-        work_queue.task_done()
-
-        print("Completed {} issues".format(num_issues))
+        try:
+            gh.push_github_issue(gh_issue, gh_comments, issue_id)
+        except:
+            abort.set()
+            raise
+        finally:
+            work_queue.task_done()
 
 
 class DummyIssue(dict):
@@ -413,43 +706,24 @@ def fill_gaps(issues_iterator, offset):
 
 
 def process_wiki_attachments(
-        issue_num, bb_url, bb_auth, options, attachments_repo):
-    respo = requests.get(
-        "{}/{}/attachments".format(bb_url, issue_num),
-        auth=bb_auth,
-    )
+        issue_num, bitbucket, options, attachments_repo):
     attachment_links = []
 
-    if respo.status_code != 200:
-        raise RuntimeError(
-            "Failed to get issue attachments for issue {} due to "
-            "unexpected HTTP status code: {}"
-            .format(issue_num, respo.status_code)
-        )
+    bb_attachments = bitbucket.get_attachments()
 
-    result = respo.json()
-    for val in result['values']:
+    for val in bb_attachments:
         filename = val['name']
-        # this seems to be in val['links']['self']['href'][0] also
-        content_url = "{}/{}/attachments/{}".format(
-            bb_url, issue_num, filename)
-        content = requests.get(content_url, auth=bb_auth)
-        if content.status_code != 200:
-            raise RuntimeError(
-                "Failed to download attachment: {}  due to "
-                "unexpected HTTP status code: {}"
-                .format(content_url, respo.status_code)
-            )
+        content = bitbucket.get_attachment(issue_num, filename)
 
         link = attachments_repo.add_attachment(
-            issue_num, filename, content.content)
+            issue_num, filename, content)
         attachment_links.append(
             {
                 "name": filename,
                 "link": link
             }
         )
-    if result['values']:
+    if bb_attachments:
         if not options.dry_run:
             attachments_repo.commit(issue_num)
             attachments_repo.push()
@@ -457,113 +731,15 @@ def process_wiki_attachments(
     return attachment_links
 
 
-def get_attachment_names(issue_num, bb_url, bb_auth):
+def get_attachment_names(issue_num, bitbucket):
     """Get the names of attachments on this issue."""
 
-    respo = requests.get(
-        "{}/{}/attachments".format(bb_url, issue_num),
-        auth=bb_auth,
-    )
-    if respo.status_code == 200:
-        result = respo.json()
-        return [
-            {"name": val['name'], "link": None} for val in result['values']]
-    else:
-        return []
-
-
-def get_issues(bb_url, offset, bb_auth):
-    """Fetch the issues from Bitbucket."""
-
-    next_url = bb_url
-
-    params = {"sort": "id"}
-    if offset:
-        params['q'] = "id > {}".format(offset)
-
-    while next_url is not None:
-        respo = requests.get(
-            next_url, auth=bb_auth,
-            params=params
-        )
-        if respo.status_code == 200:
-            result = respo.json()
-            # check to see if there are issues to process, if not break out.
-            if result['size'] == 0:
-                break
-
-            print(
-                "Retrieving issues in batches of {}, total number "
-                "of issues {}, receiving {} to {}".format(
-                    result['pagelen'], result['size'],
-                    (result['page'] - 1) * result['pagelen'] + 1,
-                    result['page'] * result['pagelen'],
-                ))
-            # https://developer.atlassian.com/bitbucket/api/2/reference/meta/pagination
-            next_url = result.get('next', None)
-
-            for issue in result['values']:
-                yield issue
-
-        else:
-            raise RuntimeError(
-                "Bitbucket returned an unexpected HTTP status code: {}"
-                .format(respo.status_code)
-            )
-
-
-def get_issue_comments(issue_id, bb_url, bb_auth):
-    """Fetch the comments for the specified Bitbucket issue."""
-    next_url = "{bb_url}/{issue_id}/comments/".format(**locals())
-
-    comments = []
-
-    while next_url is not None:
-        respo = requests.get(next_url, auth=bb_auth, params={"sort": "id"})
-        if respo.status_code != 200:
-            raise RuntimeError(
-                "Failed to get issue comments from: {} due to unexpected HTTP "
-                "status code: {}"
-                .format(next_url, respo.status_code)
-            )
-        rec = respo.json()
-        next_url = rec.get('next')
-        comments.extend(rec['values'])
-    return comments
-
-
-def get_issue_changes(issue_id, bb_url, bb_auth):
-    """Fetch the changes for the specified Bitbucket issue."""
-    next_url = "{bb_url}/{issue_id}/changes/".format(**locals())
-
-    changes = []
-
-    while next_url is not None:
-        respo = requests.get(next_url, auth=bb_auth, params={"sort": "id"})
-        # unfortunately, BB's v 2.0 API seems to be 500'ing on some of these
-        # but it does not seem to suggest the whole system isn't working
-        if respo.status_code == 500:
-            warnings.warn(
-                "Failed to get issue changes from {} due to "
-                "semi-expected HTTP status code: {}".format(
-                    next_url, respo.status_code)
-            )
-            return []
-        elif respo.status_code != 200:
-            raise RuntimeError(
-                "Failed to get issue changes from: {} due to unexpected HTTP "
-                "status code: {}"
-                .format(next_url, respo.status_code)
-            )
-        rec = respo.json()
-        next_url = rec.get('next')
-        changes.extend(rec['values'])
-    return changes
+    bb_attachments = bitbucket.get_attachments()
+    return [{"name": val['name'], "link": None} for val in bb_attachments]
 
 
 def convert_issue(
-        issue, comments, changes, options, attachment_links, gh_milestones,
-        gh_labels, config):
+        issue, comments, changes, options, attachment_links, gh, config):
     """
     Convert an issue schema from Bitbucket to GitHub's Issue Import API
     """
@@ -589,7 +765,7 @@ def convert_issue(
     if issue['state'] in config['states_as_labels']:
         labels.add(issue['state'])
 
-    labels = gh_labels.ensure(labels)
+    labels = gh.ensure_labels(labels)
 
     is_closed = issue['state'] not in ('open', 'new')
 
@@ -626,7 +802,7 @@ def convert_issue(
     # milestone number (creating it if necessary).
     milestone = issue['milestone']
     if milestone and milestone['name']:
-        out['milestone'] = gh_milestones.ensure(milestone['name'])
+        out['milestone'] = gh.ensure_milestone(milestone['name'])
 
     return out
 
@@ -642,12 +818,12 @@ def convert_comment(comment, options, config):
     }
 
 
-def convert_change(change, options, config, gh_labels, is_last):
+def convert_change(change, options, config, gh, is_last):
     """
     Convert an issue comment from Bitbucket schema to GitHub's Issue Import API
     schema.
     """
-    body = format_change_body(change, options, config, gh_labels, is_last)
+    body = format_change_body(change, options, config, gh, is_last)
     if not body:
         return None
     return {
@@ -714,7 +890,7 @@ def format_comment_body(comment, options, config):
     return template.format(**data)
 
 
-def format_change_body(change, options, config, gh_labels, is_last):
+def format_change_body(change, options, config, gh, is_last):
     author = change['user']
 
     # bb sneaked in an "assignee_account_id" that's not in their spec...
@@ -744,8 +920,8 @@ def format_change_body(change, options, config, gh_labels, is_last):
             change_element == 'state' and old in config['states_as_labels']
         )
 
-        old = gh_labels.translate(old)
-        new = gh_labels.translate(new)
+        old = gh.translate_label(old)
+        new = gh.translate_label(new)
 
         oldnewchange = [change_element, None, None]
 
@@ -1015,59 +1191,6 @@ class AttachmentsRepo:
         subprocess.check_call(args)
 
 
-class GithubMilestones:
-    """
-    This class handles creation of Github milestones for a given
-    repository.
-
-    When instantiated, it loads any milestones that exist for the
-    respository. Calling ensure() will cause a milestone with
-    a given title to be created if it doesn't already exist. The
-    Github number for the milestone is returned.
-    """
-
-    def __init__(self, repo, auth, headers):
-        self.url = 'https://api.github.com/repos/{repo}/milestones'.\
-            format(repo=repo)
-        self.session = requests.Session()
-        self.session.auth = auth
-        self.session.headers.update(headers)
-        self.refresh()
-
-    def refresh(self):
-        self.title_to_number = self.load()
-
-    def load(self):
-        milestones = {}
-        url = self.url + "?state=all"
-        while url:
-            respo = self.session.get(url)
-            if respo.status_code != 200:
-                raise RuntimeError(
-                    "Failed to get milestones due to HTTP status code: {}".
-                    format(respo.status_code))
-            for m in respo.json():
-                milestones[m['title']] = m['number']
-            if "next" in respo.links:
-                url = respo.links['next']['url']
-            else:
-                url = None
-        return milestones
-
-    def ensure(self, title):
-        number = self.title_to_number.get(title)
-        if number is None:
-            number = self.create(title)
-            self.title_to_number[title] = number
-        return number
-
-    def create(self, title):
-        respo = self.session.post(self.url, json={"title": title})
-        if respo.status_code != 201:
-            raise RuntimeError(
-                "Failed to get milestones due to HTTP status code: {}".
-                format(respo.status_code))
-        return respo.json()["number"]
 
 
 class GithubLabels:
@@ -1125,75 +1248,6 @@ class GithubLabels:
         return ('%02X%02X%02X' % (r, g, b))
 
 
-def push_github_issue(issue, comments, github_repo, auth, headers):
-    """
-    Push a single issue to GitHub.
-
-    Importing via GitHub's normal Issue API quickly triggers anti-abuse rate
-    limits. So we use their dedicated Issue Import API instead:
-    https://gist.github.com/jonmagic/5282384165e0f86ef105
-    https://github.com/nicoddemus/bitbucket_issue_migration/issues/1
-    """
-    issue_data = {'issue': issue, 'comments': comments}
-    url = 'https://api.github.com/repos/{repo}/import/issues'.format(
-        repo=github_repo)
-    respo = requests.post(url, json=issue_data, auth=auth, headers=headers)
-    if respo.status_code == 202:
-        return respo
-    elif respo.status_code == 422:
-        raise RuntimeError(
-            "Initial import validation failed for issue '{}' due to the "
-            "following errors:\n{}".format(issue['title'], respo.json())
-        )
-    else:
-        raise RuntimeError(
-            "Failed to POST issue: '{}' due to unexpected HTTP status code: {}"
-            .format(issue['title'], respo.status_code)
-        )
-
-
-def verify_github_issue_import_finished(status_url, auth, headers):
-    """
-    Check the status of a GitHub issue import.
-
-    If the status is 'pending', it sleeps, then rechecks until the status is
-    either 'imported' or 'failed'.
-    """
-    while True:  # keep checking until status is something other than 'pending'
-        respo = requests.get(status_url, auth=auth, headers=headers)
-        if respo.status_code in (403, 404):
-            print(respo.status_code, "retrieving status URL", status_url)
-            respo.status_code == 404 and print(
-                "GitHub sometimes inexplicably returns a 404 for the "
-                "check url for a single issue even when the issue "
-                "imports successfully. For details, see #77."
-            )
-            pprint.pprint(respo.headers)
-            return
-        if respo.status_code != 200:
-            raise RuntimeError(
-                "Failed to check GitHub issue import status url: {} due to "
-                "unexpected HTTP status code: {}"
-                .format(status_url, respo.status_code)
-            )
-        status = respo.json()['status']
-        if status != 'pending':
-            break
-        time.sleep(.5)
-    if status == 'imported':
-        print("Imported Issue:", respo.json()['issue_url'])
-    elif status == 'failed':
-        raise RuntimeError(
-            "Failed to import GitHub issue due to the following errors:\n{}"
-            .format(respo.json())
-        )
-    else:
-        raise RuntimeError(
-            "Status check for GitHub issue import returned unexpected status: "
-            "'{}'"
-            .format(status)
-        )
-    return respo
 
 
 if __name__ == "__main__":
