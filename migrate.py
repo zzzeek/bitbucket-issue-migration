@@ -584,6 +584,7 @@ def convert_issue(
         if v is not None:
             if key == 'component':
                 v = v['name']
+            labels.add(v)
 
     if issue['state'] in config['states_as_labels']:
         labels.add(issue['state'])
