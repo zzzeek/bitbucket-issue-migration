@@ -265,7 +265,7 @@ def format_change_body(change, options, config, gh):
             oldnewchange[2] = new
 
         if change_element == 'state':
-            if new in ('open', 'new', 'on hold') and \
+            if new in ('', 'open', 'new', 'on hold') and \
                     old in ('resolved', 'duplicate', 'wontfix', 'closed'):
                 status_changes.add("reopened")
 
