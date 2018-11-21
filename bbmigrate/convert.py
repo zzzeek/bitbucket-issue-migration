@@ -259,7 +259,7 @@ def format_change_body(change, options, config, gh):
                     old in ('resolved', 'duplicate', 'wontfix', 'closed'):
                 status_changes.add("reopened")
 
-            if old in ('open', 'new', 'on hold') and \
+            if old in ('', 'open', 'new', 'on hold') and \
                     new in ('resolved', 'duplicate', 'wontfix', 'closed'):
                 status_changes.add("closed")
         elif change_element == "content":
