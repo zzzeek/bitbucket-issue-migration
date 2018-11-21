@@ -211,9 +211,11 @@ def format_change_body(change, options, config, gh):
     author = change['user']
 
     # bb sneaked in an "assignee_account_id" that's not in their spec...
+    # "attachment" is from our zipfile export, not sure if this is in
+    # BB api 2.0
     include_changes = {
         "assignee", "state", "title", "kind", "milestone",
-        "component", "priority", "version", "content"}
+        "component", "priority", "version", "content", "attachment"}
     added_labels = set()
     removed_labels = set()
     field_changes = set()
@@ -222,6 +224,14 @@ def format_change_body(change, options, config, gh):
 
     for change_element in change['changes']:
         if change_element not in include_changes:
+            continue
+
+        if change_element == "attachment":
+            misc_changes.add(
+                "attached file {}".format(
+                    change['changes'][change_element]['new']
+                )
+            )
             continue
 
         old = change['changes'][change_element]['old']

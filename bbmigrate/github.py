@@ -127,7 +127,8 @@ class GitHub(Client):
 
     def ensure_labels(self, labels):
         labels = {
-            self.translate_label(label) for label in labels}.difference([None])
+            self.translate_label(label) for label in labels}.difference(
+                [None, ''])
 
         for label in labels.difference(self.labels):
             self._create_label(label)

@@ -16,7 +16,6 @@
 
 import argparse
 import queue
-import time
 import threading
 
 import yaml
@@ -24,6 +23,7 @@ import yaml
 from . import base
 from . import convert
 from .bitbucket import Bitbucket
+from .bitbucket import BitbucketExport
 from .github import AttachmentsRepo
 from .github import GitHub
 
@@ -38,7 +38,9 @@ def _read_arguments(argv):
         help=(
             "Bitbucket repository to pull issues from.\n"
             "Format: <user or organization name>/<repo name>\n"
-            "Example: jeffwidman/bitbucket-issue-migration"
+            "or path to export zipfile"
+            "Example: jeffwidman/bitbucket-issue-migration\n"
+            "Example: /path/to/export.zip"
         )
     )
 
@@ -151,7 +153,10 @@ def main(argv=None):
     with open(options.use_config, "r") as file_:
         config = yaml.load(file_)
 
-    bb = Bitbucket(config, options)
+    if options.bitbucket_repo.endswith(".zip"):
+        bb = BitbucketExport(config, options)
+    else:
+        bb = Bitbucket(config, options)
 
     gh = GitHub(config, options)
 

@@ -6,6 +6,11 @@ It will import issues (and close them as needed) and their comments.
 Repositories can be public or private, owned by individuals or organizations.
 Labels, milestones, and attachments are supported.
 
+Uses the Bitbucket 2.0 API **or** a zipfile from the Bitbucket export API.
+The export file works **much** better, it is fully accurate and no latency.
+There are many bugs in the 2.0 API still with the "changes" API call
+frequently failing, it also does not include when attachments were added.
+
 ## Parameters:
 
     $ bbmigrate -h
@@ -16,8 +21,14 @@ Labels, milestones, and attachments are supported.
 
     positional arguments:
       bitbucket_repo        Bitbucket repository to pull issues from.
+                            This can be a repo to access via the API or
+                            the path to a .zip file from the export API.
+                            **zipfile strongly recommended, much more accurate**
                             Format: <user or organization name>/<repo name>
                             Example: jeffwidman/bitbucket-issue-migration
+
+                            Format: <path>.zip
+                            Example: /path/to/file.zip
 
       github_repo           GitHub repository to add issues to.
                             Format: <user or organization name>/<repo name>
