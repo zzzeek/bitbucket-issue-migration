@@ -182,18 +182,20 @@ def main(argv=None):
         if isinstance(issue, base.DummyIssue):
             comments = []
             changes = []
+            attachment_links = []
         else:
             comments = bb.get_issue_comments(issue['id'])
             changes = bb.get_issue_changes(issue['id'])
 
-        if options.attachments_wiki:
-            attachment_links = convert.process_wiki_attachments(
-                issue['id'], bb, options, attachments_repo
-            )
-        elif options.mention_attachments:
-            attachment_links = convert.get_attachment_names(issue['id'], bb)
-        else:
-            attachment_links = []
+            if options.attachments_wiki:
+                attachment_links = convert.process_wiki_attachments(
+                    issue['id'], bb, options, attachments_repo
+                )
+            elif options.mention_attachments:
+                attachment_links = convert.get_attachment_names(
+                    issue['id'], bb)
+            else:
+                attachment_links = []
 
         gh_issue = convert.convert_issue(
             issue, comments, changes,
@@ -241,10 +243,6 @@ def push_issues(abort, work_queue, gh):
                 break
             else:
                 continue
-
-        # keep one second between API requests per githubs rate limiting
-        # advice
-        time.sleep(1)
 
         try:
             gh.push_github_issue(gh_issue, gh_comments, issue_id)

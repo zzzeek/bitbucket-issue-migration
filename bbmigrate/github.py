@@ -39,6 +39,7 @@ class GitHub(Client):
         self.repo = options.github_repo
         self._load_milestones()
         self._load_labels()
+        self._last_push_time = 0
 
     def _login(self):
         options = self.options
@@ -167,6 +168,14 @@ class GitHub(Client):
                 format(respo.status_code))
         return respo.json()["number"]
 
+    def _wait_for_api(self):
+        now = time.time()
+        if self._last_push_time:
+            sleep_for = 1 - (now - self._last_push_time)
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+        self._last_push_time = time.time()
+
     def push_github_issue(self, issue, comments, verify_issue_id):
         """
         Push a single issue to GitHub.
@@ -185,6 +194,7 @@ class GitHub(Client):
         issue_data = {'issue': issue, 'comments': comments}
         url = 'https://api.github.com/repos/{repo}/import/issues'.format(
             repo=self.repo)
+        self._wait_for_api()
         push_respo = self.session.post(url, json=issue_data)
         if push_respo.status_code == 422:
             raise RuntimeError(
@@ -224,6 +234,7 @@ class GitHub(Client):
         is either 'imported' or 'failed'.
         """
         while True:
+            self._wait_for_api()
             respo = self.session.get(status_url)
             if respo.status_code in (403, 404):
                 print(respo.status_code, "retrieving status URL", status_url)
@@ -243,7 +254,6 @@ class GitHub(Client):
             status = respo.json()['status']
             if status != 'pending':
                 break
-            time.sleep(1)
         if status == 'imported':
             # Verify GH & BB issue IDs match.
             # If this assertion fails, convert_links() will have incorrect
