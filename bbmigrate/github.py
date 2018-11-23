@@ -97,6 +97,17 @@ class GitHub(Client):
                 "sent: {} != {}.  Was this repo renamed?".
                 format(options.github_repo, full_name))
 
+    def _no_prs_allowed(self, issue_list):
+        """
+        We can't have any PRs in the repo because they throw off the issue
+        numbers.  So raise on that.
+        """
+        for issue in issue_list:
+            if issue.get('pull_request'):
+                raise Exception(
+                    "Repo has pull requests, this throws off the issue "
+                    "count, can only import into a repo with no pull requests")
+
     def _get_current_offset(self):
         url = (
             "https://api.github.com/repos/{repo}/issues"
@@ -106,7 +117,7 @@ class GitHub(Client):
         resp = self._expect_200(
             self._api_call(self.session.get, url), url
         )
-        json = resp.json()
+        json = self._no_prs_allowed(resp.json())
         if json:
             return json[0]['number']
         else:
@@ -290,8 +301,8 @@ class GitHub(Client):
         elif push_respo.status_code != 202:
             raise RuntimeError(
                 "Failed to POST issue: '{}' "
-                "due to unexpected HTTP status code: {}"
-                .format(issue['title'], push_respo.status_code)
+                "due to unexpected HTTP status code: {}, url {}"
+                .format(issue['title'], push_respo.status_code, url)
             )
 
         # issue POSTed successfully, now verify the import finished before
@@ -352,6 +363,8 @@ class GitHub(Client):
             # If this assertion fails, convert_links() will have incorrect
             # output.  This condition occurs when:
             # - the GH repository has pre-existing issues.
+            # - the GH repository has pre-existing pull requests
+            #   (which it considers as issues)
             # - the Bitbucket repository has gaps in the numbering.
             json = respo.json()
             gh_issue_url = json['issue_url']

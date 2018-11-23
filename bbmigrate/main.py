@@ -238,8 +238,8 @@ def main(argv=None):
         print("Queuing bitbucket issue {} for export".format(issue['id']))
         work_queue.put((issue['id'], gh_issue, gh_comments))
 
-    if not abort_event.is_set():
-        work_queue.join()
+    work_queue.join()
+    worker_thread.join()
 
 
 def push_issues(abort, work_queue, gh):
