@@ -243,7 +243,7 @@ def main(argv=None):
     # to break out
     while work_queue.qsize() != 0 and not abort_event.is_set():
         time.sleep(3)
-
+    abort_event.set()
     worker_thread.join()
 
 
