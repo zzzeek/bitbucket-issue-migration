@@ -156,6 +156,7 @@ def format_issue_body(issue, attachment_links, options, config):
     content = convert_code_block_langs(content)
     content = convert_links(content, options)
     content = convert_users(content, options)
+
     reporter = issue.get('reporter')
 
     if options.attachments_wiki and attachment_links:
@@ -194,8 +195,10 @@ def format_comment_body(comment, options, config):
     content = comment['content']['raw']
     content = convert_changesets(content, options)
     content = convert_creole_braces(content)
+    content = convert_code_block_langs(content)
     content = convert_links(content, options)
     content = convert_users(content, options)
+
     author = comment['user']
     data = dict(
         author=format_user(author, options, config),
@@ -445,10 +448,18 @@ def convert_code_block_langs(content):
     has to run after the creole braces fix.
 
     """
+
     lines = []
     in_block = False
+    in_whitespace_block = False
     first_line = False
     for line in content.splitlines():
+        if line.startswith('    '):
+            if not in_whitespace_block:
+                in_whitespace_block = first_line = True
+        elif in_whitespace_block and line and not line.startswith('    '):
+            in_whitespace_block = first_line = False
+
         if line.startswith("```"):
             if in_block:
                 in_block = first_line = False
@@ -457,8 +468,12 @@ def convert_code_block_langs(content):
             lines.append(line)
         elif in_block and first_line and re.match(r'^#!\w+$', line):
             first_line = False
+        elif in_whitespace_block and first_line and \
+                re.match(r'^    #!\w+$', line):
+            first_line = False
         else:
             lines.append(line)
+            first_line = False
     return "\n".join(lines)
 
 

@@ -18,6 +18,8 @@ states_as_labels:
   - "duplicate"
   - "invalid"
 
+# pro-tip: don't do @{gh_user} because the issue import api
+# *will* spam everyone on that.  despite what it says.
 github_user_badge_template: |
   GitHub: [{gh_user}](https://github.com/{gh_user})
 
