@@ -467,11 +467,13 @@ def convert_code_block_langs(content):
                 in_block = first_line = True
             lines.append(line)
         elif in_block and first_line and re.match(r'^#!\w+$', line):
-            first_line = False
+            pass
         elif in_whitespace_block and first_line and \
                 re.match(r'^    #!\w+$', line):
-            first_line = False
+            pass
         else:
+            if not line and first_line:
+                continue
             lines.append(line)
             first_line = False
     return "\n".join(lines)
