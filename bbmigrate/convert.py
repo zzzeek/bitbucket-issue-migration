@@ -371,7 +371,7 @@ def format_user(user, options, config):
     """
     # anonymous comments have null 'author_info', anonymous issues don't have
     # 'reported_by' key, so just be sure to pass in None
-    if user is None:
+    if user is None or user['username'].lower() == "guest":
         return "Anonymous"
     bb_user = config['bitbucket_user_badge_template'].format(
         **{"bb_user": user['username']})
