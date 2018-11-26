@@ -17,6 +17,7 @@
 import argparse
 import queue
 import threading
+import time
 
 import yaml
 
@@ -238,8 +239,11 @@ def main(argv=None):
         print("Queuing bitbucket issue {} for export".format(issue['id']))
         work_queue.put((issue['id'], gh_issue, gh_comments))
 
-    work_queue.join()
-    abort_event.set()
+    # can't use queue.join() because if a worker gets a 403 we need
+    # to break out
+    while work_queue.qsize() != 0 and not abort_event.is_set():
+        time.sleep(3)
+
     worker_thread.join()
 
 

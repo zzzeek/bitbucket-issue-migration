@@ -203,7 +203,7 @@ class GitHub(Client):
 
     def _create_milestone(self, title):
         if self.options.dry_run:
-            return random.randint(1000000)
+            return random.randint(1, 1000000)
 
         respo = self._api_call(
             self.session.post,

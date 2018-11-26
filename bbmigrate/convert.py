@@ -153,6 +153,7 @@ def format_issue_body(issue, attachment_links, options, config):
     content = issue['content']['raw']
     content = convert_changesets(content, options)
     content = convert_creole_braces(content)
+    content = convert_code_block_langs(content)
     content = convert_links(content, options)
     content = convert_users(content, options)
     reporter = issue.get('reporter')
@@ -435,6 +436,29 @@ def convert_creole_braces(content):
                 lines.append("    " + line)
             else:
                 lines.append(line.replace("{{{", "`").replace("}}}", "`"))
+    return "\n".join(lines)
+
+
+def convert_code_block_langs(content):
+    """Remove the symbols like "#!python", "#!diff"
+
+    has to run after the creole braces fix.
+
+    """
+    lines = []
+    in_block = False
+    first_line = False
+    for line in content.splitlines():
+        if line.startswith("```"):
+            if in_block:
+                in_block = first_line = False
+            else:
+                in_block = first_line = True
+            lines.append(line)
+        elif in_block and first_line and re.match(r'^#!\w+$', line):
+            first_line = False
+        else:
+            lines.append(line)
     return "\n".join(lines)
 
 
