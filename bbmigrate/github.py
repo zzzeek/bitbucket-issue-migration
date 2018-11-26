@@ -107,6 +107,7 @@ class GitHub(Client):
                 raise Exception(
                     "Repo has pull requests, this throws off the issue "
                     "count, can only import into a repo with no pull requests")
+        return issue_list
 
     def _get_current_offset(self):
         url = (

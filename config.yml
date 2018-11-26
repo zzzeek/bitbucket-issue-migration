@@ -18,14 +18,14 @@ states_as_labels:
   - "duplicate"
   - "invalid"
 
-github_username_template: |
+github_user_badge_template: |
   GitHub: [{gh_user}](https://github.com/{gh_user})
 
-bitbucket_username_template: |
+bitbucket_user_badge_template: |
   Bitbucket: [{bb_user}](https://bitbucket.org/{bb_user})
 
 user_template: |
-  {display_name} ({bb_user_badge}, {gh_user_badge})
+  {display_name} ({bb_user_badge} {gh_user_badge})
 
 issue_template: |
   **[Original report](https://bitbucket.org/{repo}/issue/{id}) by {reporter}.**

@@ -369,12 +369,12 @@ def format_user(user, options, config):
     # 'reported_by' key, so just be sure to pass in None
     if user is None:
         return "Anonymous"
-    bb_user = config['bitbucket_username_template'].strip().format(
+    bb_user = config['bitbucket_user_badge_template'].format(
         **{"bb_user": user['username']})
     gh_username = _gh_username(
         user['username'], options.users, options.gh_auth)
     if gh_username is not None:
-        gh_user = config['github_username_template'].strip().format(
+        gh_user = config['github_user_badge_template'].format(
             **{"gh_user": gh_username})
     else:
         gh_user = ""

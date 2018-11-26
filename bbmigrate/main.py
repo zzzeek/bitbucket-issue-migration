@@ -239,6 +239,7 @@ def main(argv=None):
         work_queue.put((issue['id'], gh_issue, gh_comments))
 
     work_queue.join()
+    abort_event.set()
     worker_thread.join()
 
 
